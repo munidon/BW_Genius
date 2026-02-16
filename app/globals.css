@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums lining-nums;
+  background:
+    radial-gradient(900px 600px at 50% -5%, rgba(170, 16, 40, 0.28), transparent 60%),
+    radial-gradient(700px 500px at 80% 20%, rgba(120, 18, 26, 0.24), transparent 55%),
+    radial-gradient(700px 500px at 20% 80%, rgba(110, 10, 22, 0.18), transparent 50%),
+    linear-gradient(155deg, #120406 0%, #1f0509 40%, #0a0304 100%);
+  color: #f8fafc;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 25% 35%, rgba(255, 255, 255, 0.06) 0, transparent 28%),
+    radial-gradient(circle at 70% 65%, rgba(255, 255, 255, 0.05) 0, transparent 30%);
+  mix-blend-mode: soft-light;
+}

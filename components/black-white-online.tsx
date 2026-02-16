@@ -1,0 +1,1297 @@
+"use client";
+
+import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useMemo, useState } from "react";
+import { ALL_TILES, tileColor } from "@/lib/game";
+import { supabase } from "@/lib/supabase";
+
+type RoomStatus = "waiting" | "playing" | "finished";
+type RoundPhase = "idle" | "await_lead" | "await_follow" | "resolved" | "finished";
+type RoundResult = "HOST_WIN" | "GUEST_WIN" | "DRAW";
+
+interface BwRoom {
+  id: string;
+  room_code: string;
+  host_id: string;
+  guest_id: string | null;
+  guest_ready: boolean;
+  status: RoomStatus;
+  current_round: number;
+  round_phase: RoundPhase;
+  lead_player_id: string | null;
+  host_score: number;
+  guest_score: number;
+  winner_id: string | null;
+}
+
+interface BwRoundPublic {
+  id: number;
+  room_id: string;
+  round_number: number;
+  lead_player_id: string;
+  follow_player_id: string;
+  lead_submitted: boolean;
+  follow_submitted: boolean;
+  lead_tile_color: "black" | "white" | null;
+  follow_tile_color: "black" | "white" | null;
+  result: RoundResult | null;
+  winner_id: string | null;
+}
+
+interface BwSubmission {
+  id: number;
+  room_id: string;
+  round_number: number;
+  player_id: string;
+  tile: number;
+}
+
+interface ProfileRow {
+  id: string;
+  nickname: string;
+  wins?: number | null;
+  losses?: number | null;
+}
+
+interface PlayerRecord {
+  total: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+}
+
+interface RoomRevealRow {
+  round_number: number;
+  player_id: string;
+  tile: number;
+}
+
+function makeRoomCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 6; i += 1) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
+function tileClass(tile: number) {
+  return tileColor(tile) === "black"
+    ? "bg-slate-950 text-slate-100 border-slate-700"
+    : "bg-slate-100 text-slate-900 border-slate-300";
+}
+
+function AnimatedVerdict({ text }: { text: string }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-sm"
+    >
+      <div className="flex gap-1 text-5xl font-black tracking-wider text-amber-200 md:text-7xl">
+        {text.split("").map((char, idx) => (
+          <motion.span
+            key={`${char}-${idx}`}
+            initial={{ opacity: 0, y: 40, rotateX: -90, scale: 0.7 }}
+            animate={{ opacity: 1, y: 0, rotateX: 0, scale: 1 }}
+            transition={{ duration: 0.28, delay: idx * 0.06 }}
+          >
+            {char}
+          </motion.span>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+export function BlackWhiteOnline() {
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+  const [nickname, setNickname] = useState("");
+
+  const [room, setRoom] = useState<BwRoom | null>(null);
+  const [roomCodeInput, setRoomCodeInput] = useState("");
+  const [rounds, setRounds] = useState<BwRoundPublic[]>([]);
+  const [mySubmissions, setMySubmissions] = useState<BwSubmission[]>([]);
+  const [profiles, setProfiles] = useState<Record<string, string>>({});
+  const [profileRecords, setProfileRecords] = useState<Record<string, PlayerRecord>>({});
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [flyingTile, setFlyingTile] = useState<number | null>(null);
+  const [showVerdict, setShowVerdict] = useState(false);
+  const [record, setRecord] = useState<PlayerRecord>({ total: 0, wins: 0, losses: 0, winRate: 0 });
+  const [revealedRows, setRevealedRows] = useState<RoomRevealRow[]>([]);
+  const [revealsLoadedForRoomId, setRevealsLoadedForRoomId] = useState<string | null>(null);
+  const [lastRoomSnapshot, setLastRoomSnapshot] = useState<BwRoom | null>(null);
+
+  const inRoom = Boolean(room);
+
+  const currentRound = useMemo(() => {
+    if (!room || room.current_round <= 0) return null;
+    return rounds.find((r) => r.round_number === room.current_round) ?? null;
+  }, [room, rounds]);
+
+  const myRole = useMemo(() => {
+    if (!room || !userId) return null;
+    if (room.host_id === userId) return "host";
+    if (room.guest_id === userId) return "guest";
+    return null;
+  }, [room, userId]);
+
+  const hostName = room?.host_id ? profiles[room.host_id] ?? "호스트" : "호스트";
+  const guestName = room?.guest_id ? profiles[room.guest_id] ?? "게스트" : "게스트";
+  const hostRecord = useMemo(() => {
+    if (!room) return null;
+    return profileRecords[room.host_id] ?? null;
+  }, [room, profileRecords]);
+  const guestRecord = useMemo(() => {
+    if (!room?.guest_id) return null;
+    return profileRecords[room.guest_id] ?? null;
+  }, [room, profileRecords]);
+  const revealedRoundRows = useMemo(() => {
+    if (!room || room.status !== "finished") return [];
+    const roundNumbers = [...new Set([...rounds.map((r) => r.round_number), ...revealedRows.map((r) => r.round_number)])].sort((a, b) => a - b);
+    return roundNumbers.map((roundNo) => {
+      const hostTile = revealedRows.find((r) => r.round_number === roundNo && r.player_id === room.host_id)?.tile ?? null;
+      const guestTile = room.guest_id
+        ? revealedRows.find((r) => r.round_number === roundNo && r.player_id === room.guest_id)?.tile ?? null
+        : null;
+      const roundResult = rounds.find((r) => r.round_number === roundNo)?.result ?? null;
+      return { roundNo, hostTile, guestTile, roundResult };
+    });
+  }, [room, rounds, revealedRows]);
+
+  const myScore = useMemo(() => {
+    if (!room || !myRole) return 0;
+    return myRole === "host" ? room.host_score : room.guest_score;
+  }, [room, myRole]);
+
+  const opponentScore = useMemo(() => {
+    if (!room || !myRole) return 0;
+    return myRole === "host" ? room.guest_score : room.host_score;
+  }, [room, myRole]);
+
+  const myUsedTiles = useMemo(() => mySubmissions.map((s) => s.tile), [mySubmissions]);
+  const myAvailableTiles = useMemo(() => ALL_TILES.filter((tile) => !myUsedTiles.includes(tile)), [myUsedTiles]);
+
+  const myTurn = useMemo(() => {
+    if (!room || !currentRound || !userId) return false;
+    if (room.status !== "playing") return false;
+    if (room.round_phase === "await_lead") {
+      return currentRound.lead_player_id === userId;
+    }
+    if (room.round_phase === "await_follow") {
+      return currentRound.follow_player_id === userId;
+    }
+    return false;
+  }, [room, currentRound, userId]);
+
+  const submittedThisRound = useMemo(() => {
+    if (!room) return false;
+    return mySubmissions.some((s) => s.round_number === room.current_round);
+  }, [mySubmissions, room]);
+
+  const myResultText = useMemo(() => {
+    if (!room || room.status !== "finished" || !userId) return "";
+    if (!room.winner_id) return "무승부";
+    return room.winner_id === userId ? "승리!" : "패배...";
+  }, [room, userId]);
+  const myNickname = useMemo(() => {
+    if (!userId) return "";
+    return profiles[userId] ?? nickname.trim() ?? "";
+  }, [userId, profiles, nickname]);
+  const requiresNickname = useMemo(() => {
+    if (!userId) return false;
+    return !(profiles[userId] ?? "").trim();
+  }, [userId, profiles]);
+
+  const loadMyRecord = async (uid: string) => {
+    if (!supabase) return;
+    const { data, error: profileError } = await supabase
+      .from("bw_profiles")
+      .select("wins,losses")
+      .eq("id", uid)
+      .maybeSingle();
+
+    if (profileError || !data) {
+      setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
+      return;
+    }
+
+    const wins = Number(data.wins ?? 0);
+    const losses = Number(data.losses ?? 0);
+    const total = wins + losses;
+    const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+    setRecord({ total, wins, losses, winRate });
+  };
+
+  const loadProfiles = async (ids: string[]) => {
+    if (!supabase || ids.length === 0) return;
+    const uniqueIds = [...new Set(ids.filter(Boolean))];
+    if (uniqueIds.length === 0) return;
+
+    const { data } = await supabase.from("bw_profiles").select("id,nickname,wins,losses").in("id", uniqueIds);
+    if (!data) return;
+
+    const mapped: Record<string, string> = {};
+    const recordMapped: Record<string, PlayerRecord> = {};
+    (data as ProfileRow[]).forEach((row) => {
+      mapped[row.id] = row.nickname;
+      const wins = Number(row.wins ?? 0);
+      const losses = Number(row.losses ?? 0);
+      const total = wins + losses;
+      const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+      recordMapped[row.id] = { total, wins, losses, winRate };
+    });
+    setProfiles((prev) => ({ ...prev, ...mapped }));
+    setProfileRecords((prev) => ({ ...prev, ...recordMapped }));
+  };
+
+  const loadFinishedRoundReveals = async (roomId: string) => {
+    if (!supabase) return;
+    const { data, error: revealError } = await supabase.rpc("bw_get_room_reveals", {
+      p_room_id: roomId,
+    });
+    if (revealError || !data) {
+      setRevealedRows([]);
+      setRevealsLoadedForRoomId(roomId);
+      return;
+    }
+    setRevealedRows(data as RoomRevealRow[]);
+    setRevealsLoadedForRoomId(roomId);
+  };
+
+  const loadRounds = async (roomId: string) => {
+    if (!supabase) return;
+    const query = supabase
+      .from("bw_rounds_public")
+      .select("id,room_id,round_number,lead_player_id,follow_player_id,lead_submitted,follow_submitted,lead_tile_color,follow_tile_color,result,winner_id")
+      .eq("room_id", roomId);
+
+    const { data, error: roundError } = await query.order("round_number", { ascending: true });
+
+    if (roundError && roundError.message.toLowerCase().includes("lead_tile_color")) {
+      const { data: fallbackData } = await supabase
+        .from("bw_rounds_public")
+        .select("id,room_id,round_number,lead_player_id,follow_player_id,lead_submitted,follow_submitted,result,winner_id")
+        .eq("room_id", roomId)
+        .order("round_number", { ascending: true });
+
+      if (fallbackData) {
+        const normalized = (fallbackData as BwRoundPublic[]).map((row) => ({
+          ...row,
+          lead_tile_color: null,
+          follow_tile_color: null,
+        }));
+        setRounds(normalized);
+      }
+      return;
+    }
+
+    if (data) setRounds(data as BwRoundPublic[]);
+  };
+
+  const loadMySubmissions = async (roomId: string) => {
+    if (!supabase || !userId) return;
+    const { data } = await supabase
+      .from("bw_submissions")
+      .select("id,room_id,round_number,player_id,tile")
+      .eq("room_id", roomId)
+      .eq("player_id", userId)
+      .order("round_number", { ascending: true });
+    if (data) setMySubmissions(data as BwSubmission[]);
+  };
+
+  const handleRoomSync = async (nextRoom: BwRoom) => {
+    setRoom(nextRoom);
+    await loadProfiles([nextRoom.host_id, nextRoom.guest_id ?? ""]);
+    if (nextRoom.status !== "finished") {
+      setRevealedRows([]);
+      setRevealsLoadedForRoomId(null);
+    }
+    await Promise.all([
+      loadRounds(nextRoom.id),
+      loadMySubmissions(nextRoom.id),
+      nextRoom.status === "finished" ? loadFinishedRoundReveals(nextRoom.id) : Promise.resolve(),
+    ]);
+  };
+
+  const loadLatestRoom = async (uid: string) => {
+    if (!supabase) return;
+    const { data } = await supabase
+      .from("bw_rooms")
+      .select("id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id")
+      .or(`host_id.eq.${uid},guest_id.eq.${uid}`)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data) {
+      await handleRoomSync(data as BwRoom);
+      return;
+    }
+
+    setRoom(null);
+    setRounds([]);
+    setMySubmissions([]);
+  };
+
+  const syncMyNickname = async (uid: string, fallback?: string) => {
+    if (!supabase) return;
+    const { data } = await supabase.from("bw_profiles").select("nickname").eq("id", uid).maybeSingle();
+    if (data?.nickname) {
+      setProfiles((prev) => ({ ...prev, [uid]: data.nickname }));
+      setNickname(data.nickname);
+      return;
+    }
+    if (fallback?.trim()) {
+      setProfiles((prev) => ({ ...prev, [uid]: fallback.trim() }));
+      setNickname(fallback.trim());
+    }
+  };
+
+  useEffect(() => {
+    if (!supabase) {
+      setError("Supabase 환경변수가 없습니다. .env.local을 설정해 주세요.");
+      return;
+    }
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      const user = data.session?.user;
+      const uid = user?.id ?? null;
+      setUserId(uid);
+      if (uid) {
+        await syncMyNickname(uid, (user?.user_metadata?.nickname as string | undefined) ?? "");
+        await loadMyRecord(uid);
+        await loadLatestRoom(uid);
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const user = session?.user;
+      const uid = user?.id ?? null;
+      setUserId(uid);
+      if (!uid) {
+        setRoom(null);
+        setRounds([]);
+        setMySubmissions([]);
+        setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
+        setProfileRecords({});
+        setRevealedRows([]);
+        return;
+      }
+      await syncMyNickname(uid, (user?.user_metadata?.nickname as string | undefined) ?? "");
+      await loadMyRecord(uid);
+      await loadLatestRoom(uid);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !room) return;
+    const client = supabase;
+
+    const channel = client
+      .channel(`bw-room-${room.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bw_rooms", filter: `id=eq.${room.id}` },
+        async (payload) => {
+          const next = payload.new as BwRoom;
+          if (next?.id) {
+            await handleRoomSync(next);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bw_rounds_public", filter: `room_id=eq.${room.id}` },
+        async () => {
+          await loadRounds(room.id);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bw_submissions", filter: `room_id=eq.${room.id}` },
+        async () => {
+          await loadMySubmissions(room.id);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, [room?.id, userId]);
+
+  useEffect(() => {
+    if (!room) return;
+    if (!lastRoomSnapshot) {
+      setLastRoomSnapshot(room);
+      return;
+    }
+
+    const justFinishedWithWinner =
+      lastRoomSnapshot.status === "playing" &&
+      room.status === "finished" &&
+      Boolean(room.winner_id);
+
+    if (justFinishedWithWinner && userId && room.winner_id === userId) {
+      if (revealsLoadedForRoomId !== room.id) return;
+      const submissionsInFinalRound = revealedRows.filter((r) => r.round_number === room.current_round).length;
+      const finishedBySurrender = submissionsInFinalRound < 2;
+      if (finishedBySurrender) {
+        setNotice("상대 플레이어가 기권했습니다. 종료 화면에서 라운드 숫자를 확인할 수 있습니다.");
+        setLeaveConfirmOpen(false);
+      }
+    }
+
+    setLastRoomSnapshot(room);
+  }, [room, userId, lastRoomSnapshot, revealedRows, revealsLoadedForRoomId]);
+
+  useEffect(() => {
+    if (!userId || !room) return;
+    const t = setInterval(() => {
+      loadLatestRoom(userId);
+      loadMyRecord(userId);
+    }, 2000);
+    return () => clearInterval(t);
+  }, [userId, room?.id]);
+
+  useEffect(() => {
+    if (!room || room.status !== "finished") {
+      setShowVerdict(false);
+      return;
+    }
+
+    setShowVerdict(true);
+    const t = setTimeout(() => {
+      setShowVerdict(false);
+    }, 2600);
+
+    return () => clearTimeout(t);
+  }, [room?.status, room?.winner_id]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 3000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
+  const formatAuthError = (raw: string) => {
+    const lower = raw.toLowerCase();
+    if (lower.includes("provider is not enabled")) {
+      return "Google 로그인이 비활성화되어 있습니다. Supabase Auth Provider 설정을 확인해 주세요.";
+    }
+    if (lower.includes("oauth")) {
+      return "Google 로그인 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
+    }
+    return raw;
+  };
+
+  const formatNicknameError = (raw: string, code?: string) => {
+    const lower = raw.toLowerCase();
+    if (code === "23505" || lower.includes("duplicate key value") || lower.includes("bw_profiles_nickname")) {
+      return "이미 사용 중인 닉네임입니다. 다른 닉네임을 입력해 주세요.";
+    }
+    if (lower.includes("char_length") || lower.includes("check constraint")) {
+      return "닉네임은 2~20자로 입력해 주세요.";
+    }
+    return raw;
+  };
+
+  const signInWithGoogle = async () => {
+    if (!supabase) return;
+    setError("");
+    setNotice("");
+    setLoading(true);
+
+    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/` : undefined;
+    if (typeof window !== "undefined") {
+      console.info("[auth] signInWithGoogle redirectTo", {
+        origin: window.location.origin,
+        href: window.location.href,
+        redirectTo,
+      });
+    }
+    const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo },
+    });
+
+    if (oauthError) {
+      setError(formatAuthError(oauthError.message));
+      setLoading(false);
+      return;
+    }
+  };
+
+  const saveNickname = async () => {
+    if (!supabase || !userId) return;
+    if (!nickname.trim()) {
+      setError("닉네임을 입력해 주세요.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    const { error: upsertError } = await supabase.from("bw_profiles").upsert({
+      id: userId,
+      nickname: nickname.trim(),
+    });
+    if (upsertError) {
+      setError(formatNicknameError(upsertError.message, upsertError.code));
+      setLoading(false);
+      return;
+    }
+    setProfiles((prev) => ({ ...prev, [userId]: nickname.trim() }));
+    setNotice("닉네임 설정이 완료되었습니다.");
+    setLoading(false);
+  };
+
+  const logout = async () => {
+    if (!supabase) return;
+    setLoading(true);
+    setError("");
+    setNotice("");
+    const { error: logoutError } = await supabase.auth.signOut();
+    if (logoutError) {
+      setError(`로그아웃 실패: ${logoutError.message}`);
+      setLoading(false);
+      return;
+    }
+    setUserId(null);
+    setRoom(null);
+    setRounds([]);
+    setMySubmissions([]);
+    setLoading(false);
+  };
+
+  const createRoom = async () => {
+    if (!supabase) return;
+    const displayNickname = (myNickname || nickname).trim();
+    if (!displayNickname) {
+      setError("닉네임이 필요합니다. 우측 상단 로그인 또는 닉네임 설정을 먼저 완료해 주세요.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    const code = makeRoomCode();
+    const { data, error: createError } = await supabase.rpc("bw_create_room", {
+      p_room_code: code,
+      p_nickname: displayNickname,
+    });
+
+    if (createError) {
+      setError(formatNicknameError(createError.message));
+      setLoading(false);
+      return;
+    }
+
+    await handleRoomSync(data as BwRoom);
+    setLoading(false);
+  };
+
+  const joinRoom = async () => {
+    if (!supabase) return;
+    const displayNickname = (myNickname || nickname).trim();
+    if (!displayNickname || roomCodeInput.trim().length !== 6) {
+      setError("닉네임 설정과 6자리 방 코드를 확인해 주세요.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    const { data, error: joinError } = await supabase.rpc("bw_join_room", {
+      p_room_code: roomCodeInput.trim().toUpperCase(),
+      p_nickname: displayNickname,
+    });
+
+    if (joinError) {
+      setError(formatNicknameError(joinError.message));
+      setLoading(false);
+      return;
+    }
+
+    await handleRoomSync(data as BwRoom);
+    setLoading(false);
+  };
+
+  const setGuestReady = async (ready: boolean) => {
+    if (!supabase || !room) return;
+    setLoading(true);
+    setError("");
+    const { data, error: readyError } = await supabase.rpc("bw_set_guest_ready", {
+      p_room_id: room.id,
+      p_ready: ready,
+    });
+    if (readyError) {
+      setError(readyError.message);
+      setLoading(false);
+      return;
+    }
+    if (data) {
+      await handleRoomSync(data as BwRoom);
+    }
+    setLoading(false);
+  };
+
+  const startGame = async () => {
+    if (!supabase || !room) return;
+    setLoading(true);
+    setError("");
+    const { data, error: startError } = await supabase.rpc("bw_start_game", { p_room_id: room.id });
+    if (startError) {
+      setError(startError.message);
+      setLoading(false);
+      return;
+    }
+    if (data) {
+      await handleRoomSync(data as BwRoom);
+    }
+    setLoading(false);
+  };
+
+  const submitTile = async (tile: number) => {
+    if (!supabase || !room || !myTurn || submittedThisRound) return;
+
+    setFlyingTile(tile);
+    setTimeout(() => setFlyingTile(null), 560);
+
+    setLoading(true);
+    setError("");
+    const { data, error: submitError } = await supabase.rpc("bw_submit_tile", {
+      p_room_id: room.id,
+      p_tile: tile,
+    });
+    if (submitError) {
+      setError(submitError.message);
+      setLoading(false);
+      return;
+    }
+    if (data) {
+      await handleRoomSync(data as BwRoom);
+    }
+    setLoading(false);
+  };
+
+  const resetRoom = async () => {
+    if (!supabase || !room) return;
+    setLoading(true);
+    setError("");
+    const { data, error: resetError } = await supabase.rpc("bw_reset_room", {
+      p_room_id: room.id,
+    });
+    if (resetError) {
+      setError(resetError.message);
+      setLoading(false);
+      return;
+    }
+    if (data) {
+      await handleRoomSync(data as BwRoom);
+    }
+    setLoading(false);
+  };
+
+  const leaveRoom = async () => {
+    if (!supabase || !room || !userId) return;
+
+    const isPlaying = room.status === "playing";
+
+    setLoading(true);
+    setError("");
+    setNotice("");
+
+    const { error: leaveError } = await supabase.rpc("bw_leave_room", {
+      p_room_id: room.id,
+    });
+    if (leaveError) {
+      if (leaveError.message.toLowerCase().includes("does not exist")) {
+        setError("서버에 bw_leave_room 함수가 없습니다. 최신 스키마를 적용해 주세요.");
+      } else {
+        setError(leaveError.message);
+      }
+      setLoading(false);
+      return;
+    }
+
+    setLeaveConfirmOpen(false);
+    setRoom(null);
+    setRounds([]);
+    setMySubmissions([]);
+    setNotice(isPlaying ? "게임에서 나가 기권 처리되었습니다." : "Room에서 나갔습니다.");
+    setLoading(false);
+  };
+
+  const leaveFinishedGameToLobby = () => {
+    setError("");
+    setNotice("게임 화면에서 나왔습니다.");
+    setRoom(null);
+    setRounds([]);
+    setMySubmissions([]);
+  };
+
+  if (!supabase) {
+    return <div className="p-6 text-red-300">Supabase 설정이 없어 실행할 수 없습니다.</div>;
+  }
+
+  const getPlayerTileColor = (round: BwRoundPublic, playerId: string | null): "black" | "white" | null => {
+    if (!playerId) return null;
+    if (round.lead_player_id === playerId) return round.lead_tile_color;
+    if (round.follow_player_id === playerId) return round.follow_tile_color;
+    return null;
+  };
+
+  const getRoundResultBorder = (round: BwRoundPublic, playerId: string | null) => {
+    if (!playerId || !round.result) return "border-slate-500/60";
+    if (!round.winner_id) return "border-slate-400/70";
+    return round.winner_id === playerId ? "border-emerald-400/90" : "border-red-400/90";
+  };
+
+  const getTileColorClass = (tile: number | null) => {
+    if (tile === null) return "border-slate-500/60 bg-slate-500/45 text-slate-300";
+    return tileColor(tile) === "black"
+      ? "border-slate-700 bg-slate-950 text-slate-100"
+      : "border-slate-200 bg-slate-100 text-slate-900";
+  };
+
+  return (
+    <main className="relative min-h-screen overflow-hidden px-4 py-8 text-slate-100 md:px-8">
+      <div className="mx-auto w-full max-w-5xl">
+        <header className="mb-6 rounded-2xl border border-red-900/50 bg-black/40 p-5 backdrop-blur-md">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-black tracking-wide md:text-4xl">🍙 흑과 백</h1>
+              <p className="mt-2 text-sm text-red-100/75">1:1 리얼타임 한판승부 | 9라운드 | 5승 선취 즉시 종료</p>
+            </div>
+            {!userId ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAuthModalOpen(true)}
+                  className="rounded-md bg-[#bc260f] px-4 py-2 text-sm font-bold text-white"
+                >
+                  로그인
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex items-center gap-5">
+                  <span className="text-sm text-red-100">{myNickname || "플레이어"}님 환영합니다!✋</span>
+                  <button
+                    type="button"
+                    onClick={logout}
+                    disabled={loading}
+                    className="rounded-lg border border-red-200/30 px-3 py-1.5 text-sm disabled:opacity-60"
+                  >
+                    로그아웃
+                  </button>
+                </div>
+                <p className="mt-2 text-sm text-red-100/85">
+                  {record.total}전 {record.wins}승 {record.losses}패 ({record.winRate}%)
+                </p>
+              </div>
+            )}
+          </div>
+        </header>
+
+        {error && <div className="mb-4 rounded-xl border border-red-400/30 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
+        <AnimatePresence>
+          {notice && (
+            <motion.div
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.25 }}
+              className="mb-4 rounded-xl border border-emerald-400/30 bg-emerald-950/40 p-3 text-sm text-emerald-200"
+            >
+              {notice}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {authModalOpen && !userId && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+            >
+              <motion.div
+                initial={{ y: 14, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 14, opacity: 0 }}
+                className="w-full max-w-md rounded-xl border border-red-900/50 bg-slate-950 p-5"
+              >
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-lg font-bold">로그인</h3>
+                  <button type="button" onClick={() => setAuthModalOpen(false)} className="text-sm text-slate-300">
+                    닫기
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={signInWithGoogle}
+                  disabled={loading}
+                  className="mb-3 w-full rounded-lg border border-red-200/40 bg-white px-4 py-2 text-sm font-bold text-slate-900 disabled:opacity-60"
+                >
+                  Google로 로그인
+                </button>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {leaveConfirmOpen && room && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
+            >
+              <motion.div
+                initial={{ y: 14, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 14, opacity: 0 }}
+                className="w-full max-w-md rounded-xl border border-red-900/50 bg-slate-950 p-5"
+              >
+                <div className="mb-3">
+                  <h3 className="text-lg font-bold">정말 나가시겠어요?</h3>
+                </div>
+                <p className="mb-4 text-sm text-red-100/85">
+                  {room.status === "playing"
+                    ? "지금 나가면 즉시 기권 처리되며, 상대 승리로 게임이 종료됩니다."
+                    : "방에서 나가면 Room Lobby로 돌아갑니다."}
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setLeaveConfirmOpen(false)}
+                    disabled={loading}
+                    className="rounded-lg border border-red-100/30 px-4 py-2 text-sm text-red-100 disabled:opacity-60"
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    onClick={leaveRoom}
+                    disabled={loading}
+                    className="rounded-lg bg-red-500 px-4 py-2 text-sm font-bold text-black disabled:opacity-60"
+                  >
+                    나가기
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {userId && requiresNickname && (
+          <section className="mb-4 rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
+            <h2 className="mb-3 text-xl font-bold">닉네임 설정</h2>
+            <p className="mb-3 text-sm text-red-100/80">Google 로그인 후 최초 1회 닉네임을 설정해야 게임을 진행할 수 있습니다.</p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                className="min-w-56 flex-1 rounded-lg border border-red-900/60 bg-black/40 px-3 py-2"
+                placeholder="닉네임"
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={saveNickname}
+                disabled={loading}
+                className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black disabled:opacity-60"
+              >
+                닉네임 저장
+              </button>
+            </div>
+          </section>
+        )}
+
+        {userId && !requiresNickname && !inRoom && (
+          <section className="rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
+            <div className="mb-4">
+              <h2 className="text-xl font-bold">Room Lobby</h2>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={createRoom}
+                disabled={loading}
+                className="rounded-xl bg-red-500 px-4 py-3 text-lg font-bold text-black disabled:opacity-60"
+              >
+                방 만들기
+              </button>
+
+              <div className="flex gap-2">
+                <input
+                  className="w-full rounded-lg border border-red-900/60 bg-black/40 px-3 py-2 uppercase"
+                  placeholder="방 코드 6자리"
+                  value={roomCodeInput}
+                  onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
+                  maxLength={6}
+                />
+                <button
+                  type="button"
+                  onClick={joinRoom}
+                  disabled={loading}
+                  className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black disabled:opacity-60"
+                >
+                  입장
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {userId && !requiresNickname && room && (
+          <section className="space-y-4">
+            <div className="rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm text-red-100/70">ROOM CODE</p>
+                  <p className="text-2xl font-black tracking-[0.2em] text-red-100">{room.room_code}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-red-100/70">STATUS</p>
+                  <p className="font-bold uppercase">{room.status}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div
+                  className={`rounded-xl bg-black/35 p-3 ${room.status === "waiting" && room.host_id
+                    ? "border-2 border-white/90"
+                    : "border border-red-900/40"
+                    }`}
+                >
+                  <p className="text-sm text-red-100/70">호스트</p>
+                  <p className="text-lg font-bold">{hostName}</p>
+                  <p className="text-sm">점수 {room.host_score}</p>
+                  {room.status === "waiting" && hostRecord && (
+                    <p className="mt-1 text-xs text-red-100/80">
+                      전적 {hostRecord.total}전 {hostRecord.wins}승 {hostRecord.losses}패 ({hostRecord.winRate}%)
+                    </p>
+                  )}
+                </div>
+                <div
+                  className={`rounded-xl bg-black/35 p-3 ${room.status === "waiting" && room.guest_id
+                    ? "border-2 border-white/90"
+                    : "border border-red-900/40"
+                    }`}
+                >
+                  <p className="text-sm text-red-100/70">게스트</p>
+                  <p className="text-lg font-bold">{guestName}</p>
+                  <p className="text-sm">점수 {room.guest_score}</p>
+                  {room.status === "waiting" && guestRecord && (
+                    <p className="mt-1 text-xs text-red-100/80">
+                      전적 {guestRecord.total}전 {guestRecord.wins}승 {guestRecord.losses}패 ({guestRecord.winRate}%)
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {room.status === "waiting" && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {myRole === "guest" && (
+                    <button
+                      type="button"
+                      onClick={() => setGuestReady(!room.guest_ready)}
+                      className="rounded-lg bg-emerald-400 px-4 py-2 font-bold text-black"
+                    >
+                      {room.guest_ready ? "준비 취소" : "준비"}
+                    </button>
+                  )}
+
+                  {myRole === "host" && (
+                    <button
+                      type="button"
+                      onClick={startGame}
+                      disabled={!room.guest_id || !room.guest_ready}
+                      className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black disabled:opacity-40"
+                    >
+                      게임 시작
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setLeaveConfirmOpen(true)}
+                    className="rounded-lg border border-red-100/40 px-4 py-2"
+                  >
+                    Room 나가기
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {room.status === "playing" && (
+              <div className="rounded-2xl border border-red-900/50 bg-black/50 p-5 backdrop-blur-md">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-lg font-bold">라운드 {room.current_round} / 9</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-lg font-black tracking-wider">{myScore} : {opponentScore}</p>
+                    <button
+                      type="button"
+                      onClick={() => setLeaveConfirmOpen(true)}
+                      disabled={loading}
+                      className="rounded-lg border border-red-100/40 px-3 py-1.5 text-sm disabled:opacity-60"
+                    >
+                      기권 후 나가기
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-5 rounded-xl border border-slate-500/60 bg-slate-700/40 p-3 text-sm">
+                  <p className="mb-2 font-bold">실시간 제출 색상 보드</p>
+                  <div className="space-y-2 text-red-100/80">
+                    <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
+                      <p className="text-xs font-bold">내 타일</p>
+                      {ALL_TILES.map((roundNo) => {
+                        const round = rounds.find((r) => r.round_number === roundNo);
+                        const resultBorder = round ? getRoundResultBorder(round, userId) : "border-slate-500/60";
+                        const color = round ? getPlayerTileColor(round, userId) : null;
+                        return (
+                          <div
+                            key={`my-color-${roundNo}`}
+                            className={`h-6 rounded border-2 ${color === "black"
+                              ? `bg-slate-950 ${resultBorder}`
+                              : color === "white"
+                                ? `bg-slate-100 ${resultBorder}`
+                                : "border-slate-500/60 bg-slate-500/45"
+                              }`}
+                            title={color ? `${roundNo}라운드: ${color}` : `${roundNo}라운드: 미제출`}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
+                      <p className="text-xs font-bold">상대 타일</p>
+                      {ALL_TILES.map((roundNo) => {
+                        const round = rounds.find((r) => r.round_number === roundNo);
+                        const opponentId = myRole === "host" ? room.guest_id : room.host_id;
+                        const resultBorder = round ? getRoundResultBorder(round, opponentId ?? null) : "border-slate-500/60";
+                        const color = round ? getPlayerTileColor(round, opponentId ?? null) : null;
+                        return (
+                          <div
+                            key={`opp-color-${roundNo}`}
+                            className={`h-6 rounded border-2 ${color === "black"
+                              ? `bg-slate-950 ${resultBorder}`
+                              : color === "white"
+                                ? `bg-slate-100 ${resultBorder}`
+                                : "border-slate-500/60 bg-slate-500/45"
+                              }`}
+                            title={color ? `${roundNo}라운드: ${color}` : `${roundNo}라운드: 미제출`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border border-red-900/40 bg-black/35 p-3 text-sm">
+                    <p>선 플레이어 제출: {currentRound?.lead_submitted ? "완료" : "대기"}</p>
+                    <p>후 플레이어 제출: {currentRound?.follow_submitted ? "완료" : "대기"}</p>
+                  </div>
+                  <div className="rounded-xl border border-red-900/40 bg-black/35 p-3 text-sm">
+                    <p>{myTurn && !submittedThisRound ? "당신 차례입니다!" : "상대 차례입니다!"}</p>
+                    <p>내 사용 타일: {myUsedTiles.length} / 9</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 md:grid-cols-9">
+                  {ALL_TILES.map((tile) => {
+                    const isAvailable = myAvailableTiles.includes(tile);
+                    const canPlay = isAvailable && myTurn && !submittedThisRound;
+                    return (
+                      <motion.button
+                        whileHover={canPlay ? { y: -4 } : undefined}
+                        whileTap={canPlay ? { scale: 0.95 } : undefined}
+                        key={tile}
+                        type="button"
+                        onClick={() => submitTile(tile)}
+                        disabled={!canPlay || loading}
+                        className={`rounded-xl border p-3 text-center text-2xl font-black transition ${isAvailable ? tileClass(tile) : "cursor-not-allowed border-red-950/60 bg-black/60 text-red-100/30"
+                          }`}
+                      >
+                        {isAvailable ? tile : "X"}
+                      </motion.button>
+                    );
+                  })}
+                </div>
+
+
+
+                <div className="mt-3 rounded-xl border border-red-900/40 bg-black/35 p-3 text-sm">
+                  <p className="mb-2 font-bold">공개 라운드 로그 (숫자 비공개)</p>
+                  <div className="space-y-1 text-red-100/80">
+                    {rounds
+                      .filter((r) => r.result)
+                      .map((r) => (
+                        <p key={r.id}>
+                          R{r.round_number}: {r.result === "DRAW" ? "무승부" : r.result === "HOST_WIN" ? `${hostName} 승` : `${guestName} 승`}
+                        </p>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {room.status === "finished" && (
+              <div className="rounded-2xl border border-red-900/50 bg-black/50 p-5 backdrop-blur-md">
+                <p className="text-lg font-bold">게임 종료</p>
+                <p className="mt-1 text-red-100/80">
+                  최종 점수 {room.host_score} : {room.guest_score}
+                </p>
+                <div className="mt-3 rounded-xl border border-slate-500/60 bg-slate-700/40 p-3 text-sm">
+                  <p className="mb-2 font-bold">라운드별 숫자 공개</p>
+                  <div className="space-y-2 text-red-100/80">
+                    {revealedRoundRows.length === 0 && <p>공개할 라운드 데이터가 없습니다.</p>}
+                    {revealedRoundRows.length > 0 && (
+                      <>
+                        <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
+                          <p className="text-xs font-bold">{hostName}</p>
+                          {ALL_TILES.map((roundNo) => {
+                            const row = revealedRoundRows.find((r) => r.roundNo === roundNo);
+                            const round = rounds.find((r) => r.round_number === roundNo);
+                            const resultBorder = round ? getRoundResultBorder(round, room.host_id) : "border-slate-500/60";
+                            const tileClassName = getTileColorClass(row?.hostTile ?? null);
+                            return (
+                              <div
+                                key={`reveal-host-${roundNo}`}
+                                className={`h-8 rounded border-2 ${tileClassName} ${resultBorder} flex items-center justify-center text-sm font-black`}
+                                title={row?.hostTile !== null && row?.hostTile !== undefined ? `${roundNo}라운드: ${row.hostTile}` : `${roundNo}라운드: 미제출`}
+                              >
+                                {row?.hostTile ?? "-"}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
+                          <p className="text-xs font-bold">{guestName}</p>
+                          {ALL_TILES.map((roundNo) => {
+                            const row = revealedRoundRows.find((r) => r.roundNo === roundNo);
+                            const round = rounds.find((r) => r.round_number === roundNo);
+                            const resultBorder = round && room.guest_id ? getRoundResultBorder(round, room.guest_id) : "border-slate-500/60";
+                            const tileClassName = getTileColorClass(row?.guestTile ?? null);
+                            return (
+                              <div
+                                key={`reveal-guest-${roundNo}`}
+                                className={`h-8 rounded border-2 ${tileClassName} ${resultBorder} flex items-center justify-center text-sm font-black`}
+                                title={row?.guestTile !== null && row?.guestTile !== undefined ? `${roundNo}라운드: ${row.guestTile}` : `${roundNo}라운드: 미제출`}
+                              >
+                                {row?.guestTile ?? "-"}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {myRole === "host" && (
+                    <button type="button" onClick={resetRoom} className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black">
+                      Room으로 복귀
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={leaveFinishedGameToLobby}
+                    className="rounded-lg border border-red-100/40 px-4 py-2"
+                  >
+                    게임 나가기
+                  </button>
+                  {myRole !== "host" && <p className="text-sm text-red-100/70">호스트가 Room 복귀 버튼을 누르면 다음 게임을 준비할 수 있습니다.</p>}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {!userId && (
+          <section className="mt-6 rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
+            <div className="mb-4 flex items-center justify-between">
+            </div>
+            <div className="overflow-hidden rounded-xl border border-red-900/40 bg-black/70">
+              <img
+                src="/images/landing.jpg"
+                alt="Landing"
+                className="w-full rounded-xl border border-red-900/40 object-cover"
+              />
+
+            </div>
+            <span className="mt-2 block w-full text-right text-xs text-red-100/70">Generated by ChatGPT</span>
+          </section>
+        )}
+
+        {room?.status !== "playing" && (
+          <section className="mt-6 rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-bold">게임 규칙 안내</h3>
+              <span className="text-xs text-red-100/70">실전 전 빠르게 확인하세요</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-xl border border-red-900/40 bg-black/40 p-4">
+                <p className="mb-2 text-sm font-semibold text-red-200">타일 구성</p>
+                <p className="text-sm text-red-100/85">각 플레이어는 1~9 타일 보유</p>
+                <p className="text-sm text-red-100/85">흑색: 2, 4, 6, 8</p>
+                <p className="text-sm text-red-100/85">백색: 1, 3, 5, 7, 9</p>
+              </div>
+              <div className="rounded-xl border border-red-900/40 bg-black/40 p-4">
+                <p className="mb-2 text-sm font-semibold text-red-200">승패 규칙</p>
+                <p className="text-sm text-red-100/85">큰 숫자가 승리, 승자는 1점 획득</p>
+                <p className="text-sm text-red-100/85">예외: 숫자 1은 숫자 9를 이김</p>
+                <p className="text-sm text-red-100/85">상대가 낸 숫자는 공개되지 않음</p>
+              </div>
+              <div className="rounded-xl border border-red-900/40 bg-black/40 p-4">
+                <p className="mb-2 text-sm font-semibold text-red-200">라운드 진행</p>
+                <p className="text-sm text-red-100/85">총 9라운드, 선/후 순서대로 제출</p>
+                <p className="text-sm text-red-100/85">게스트 준비 완료 후 호스트 시작 가능</p>
+                <p className="text-sm text-red-100/85">무승부 시 선 플레이어 유지</p>
+              </div>
+              <div className="rounded-xl border border-red-900/40 bg-black/40 p-4">
+                <p className="mb-2 text-sm font-semibold text-red-200">종료 조건</p>
+                <p className="text-sm text-red-100/85">5승 선취 시 즉시 게임 종료</p>
+                <p className="text-sm text-red-100/85">최대 9라운드 진행</p>
+                <p className="text-sm text-red-100/85">종료 후 Room으로 복귀 가능</p>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
+
+      <AnimatePresence>{flyingTile !== null && <FlyingTile tile={flyingTile} />}</AnimatePresence>
+      <AnimatePresence>{showVerdict && myResultText && <AnimatedVerdict text={myResultText} />}</AnimatePresence>
+    </main>
+  );
+}
+
+function FlyingTile({ tile }: { tile: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 120, scale: 0.8, rotate: -10 }}
+      animate={{ opacity: 1, y: -260, scale: 1.05, rotate: 8 }}
+      exit={{ opacity: 0, y: -320, scale: 0.9 }}
+      transition={{ duration: 0.55, ease: "easeOut" }}
+      className="pointer-events-none fixed bottom-10 left-1/2 z-50 -translate-x-1/2"
+    >
+      <div className={`rounded-2xl border px-8 py-6 text-5xl font-black shadow-2xl ${tileClass(tile)}`}>{tile}</div>
+    </motion.div>
+  );
+}
