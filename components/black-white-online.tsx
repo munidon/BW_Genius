@@ -143,8 +143,9 @@ function AnimatedVerdict({ text }: { text: string }) {
 
 function StarterCoinOverlay({ role }: { role: "lead" | "follow" }) {
   const [imageFailed, setImageFailed] = useState(false);
-  const finalRotation = role === "lead" ? 1440 : 1620;
+  const finalRotation = role === "lead" ? 720 : 900;
   const roleLabel = role === "lead" ? "先 플레이어" : "後 플레이어";
+  const coinDepthPx = 16;
 
   useEffect(() => {
     let active = true;
@@ -179,23 +180,31 @@ function StarterCoinOverlay({ role }: { role: "lead" | "follow" }) {
       exit={{ opacity: 0 }}
       className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-sm"
     >
-      <div className="flex flex-col items-center gap-5">
+      <div className="flex flex-col items-center gap-5" style={{ perspective: "1000px", WebkitPerspective: "1000px" }}>
         <motion.div
-          initial={{ rotateY: 0, scale: 0.85, opacity: 0.7 }}
-          animate={{ rotateY: [0, 900, 1260, finalRotation], scale: [0.85, 1.04, 1], opacity: [0.7, 1, 1] }}
+          initial={{ rotateY: 0, rotateX: -6, scale: 0.85, opacity: 0.7 }}
+          animate={{ rotateY: [0, 360, 540, finalRotation], rotateX: [-6, -2, 0, 0], scale: [0.85, 1.04, 1], opacity: [0.7, 1, 1] }}
           transition={{
             duration: STARTER_COIN_SPIN_DURATION_SEC,
             times: [0, 0.5, 0.78, 1],
             ease: ["easeIn", "linear", "easeOut"],
           }}
-          style={{ transformStyle: "preserve-3d" }}
+          style={{
+            transformStyle: "preserve-3d",
+            WebkitTransformStyle: "preserve-3d",
+            transformOrigin: "50% 50%",
+            WebkitTransformOrigin: "50% 50%",
+          }}
           className="relative h-52 w-52 md:h-64 md:w-64"
         >
           <div
             className={`absolute inset-0 overflow-hidden rounded-full border-2 border-amber-100/80 shadow-[0_18px_40px_rgba(0,0,0,0.55)] ${imageFailed ? "bg-gradient-to-br from-amber-500 to-amber-700" : ""}`}
             style={{
+              transform: `translateZ(${coinDepthPx / 2}px)`,
               backfaceVisibility: "hidden",
               WebkitBackfaceVisibility: "hidden",
+              transformStyle: "preserve-3d",
+              WebkitTransformStyle: "preserve-3d",
               ...(imageFailed
                 ? {}
                 : {
@@ -210,9 +219,11 @@ function StarterCoinOverlay({ role }: { role: "lead" | "follow" }) {
           <div
             className={`absolute inset-0 overflow-hidden rounded-full border-2 border-amber-100/80 shadow-[0_18px_40px_rgba(0,0,0,0.55)] ${imageFailed ? "bg-gradient-to-br from-amber-500 to-amber-700" : ""}`}
             style={{
-              transform: "rotateY(180deg)",
+              transform: `translateZ(${-coinDepthPx / 2}px) rotateY(180deg)`,
               backfaceVisibility: "hidden",
               WebkitBackfaceVisibility: "hidden",
+              transformStyle: "preserve-3d",
+              WebkitTransformStyle: "preserve-3d",
               ...(imageFailed
                 ? {}
                 : {
