@@ -1407,7 +1407,7 @@ export function BlackWhiteOnline() {
   const getRoundResultBorder = (round: BwRoundPublic, playerId: string | null) => {
     if (!playerId || !round.result) return "border-slate-500/60";
     if (!round.winner_id) return "border-slate-400/70";
-    return round.winner_id === playerId ? "border-emerald-400/90" : "border-red-400/90";
+    return round.winner_id === playerId ? "border-green-500/95" : "border-red-500/95";
   };
 
   const getTileColorClass = (tile: number | null) => {
@@ -1710,51 +1710,35 @@ export function BlackWhiteOnline() {
                 <div className="mt-5 rounded-xl border border-slate-500/60 bg-slate-700/40 p-3 text-sm">
                   <p className="mb-2 font-bold">실시간 제출 색상 보드</p>
                   <div className="space-y-2 text-red-100/80">
-                    <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
-                      <p className="text-xs font-bold">내 타일</p>
-                      {ALL_TILES.map((roundNo) => {
-                        const round = rounds.find((r) => r.round_number === roundNo);
-                        const resultBorder = round ? getRoundResultBorder(round, userId) : "border-slate-500/60";
-                        const color = round ? getPlayerTileColor(round, userId) : null;
-                        return (
-                          <div
-                            key={`my-color-${roundNo}`}
-                            className={`h-6 rounded border-2 ${color === "black"
-                              ? `bg-slate-950 ${resultBorder}`
-                              : color === "white"
-                                ? `bg-slate-100 ${resultBorder}`
-                                : "border-slate-500/60 bg-slate-500/45"
-                              }`}
-                            title={color ? `${roundNo}라운드: ${color}` : `${roundNo}라운드: 미제출`}
-                          />
-                        );
-                      })}
-                    </div>
-                    <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
-                      <p className="text-xs font-bold">상대 타일</p>
-                      {ALL_TILES.map((roundNo) => {
-                        const round = rounds.find((r) => r.round_number === roundNo);
-                        const opponentId = myRole === "host" ? room.guest_id : room.host_id;
-                        const resultBorder = round ? getRoundResultBorder(round, opponentId ?? null) : "border-slate-500/60";
-                        const color = round ? getPlayerTileColor(round, opponentId ?? null) : null;
-                        return (
-                          <div
-                            key={`opp-color-${roundNo}`}
-                            className={`h-6 rounded border-2 ${color === "black"
-                              ? `bg-slate-950 ${resultBorder}`
-                              : color === "white"
-                                ? `bg-slate-100 ${resultBorder}`
-                                : "border-slate-500/60 bg-slate-500/45"
-                              }`}
-                            title={color ? `${roundNo}라운드: ${color}` : `${roundNo}라운드: 미제출`}
-                          />
-                        );
-                      })}
-                    </div>
+                    {[
+                      { key: "opponent", label: "상대 타일", playerId: (myRole === "host" ? room.guest_id : room.host_id) ?? null },
+                      { key: "me", label: "내 타일", playerId: userId },
+                    ].map(({ key, label, playerId }) => (
+                      <div key={`live-color-row-${key}`} className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
+                        <p className="text-xs font-bold">{label}</p>
+                        {ALL_TILES.map((roundNo) => {
+                          const round = rounds.find((r) => r.round_number === roundNo);
+                          const resultBorder = round ? getRoundResultBorder(round, playerId) : "border-slate-500/60";
+                          const color = round ? getPlayerTileColor(round, playerId) : null;
+                          return (
+                            <div
+                              key={`${key}-color-${roundNo}`}
+                              className={`h-6 rounded border-4 ${color === "black"
+                                ? `bg-slate-950 ${resultBorder}`
+                                : color === "white"
+                                  ? `bg-slate-100 ${resultBorder}`
+                                  : "border-slate-500/60 bg-slate-500/45"
+                                }`}
+                              title={color ? `${roundNo}라운드: ${color}` : `${roundNo}라운드: 미제출`}
+                            />
+                          );
+                        })}
+                      </div>
+                    ))}
                   </div>
                 </div>
 
-                <div className="mb-4 grid gap-3 md:grid-cols-2">
+                <div className="mt-4 mb-4 grid gap-3 md:grid-cols-2">
                   <div className="rounded-xl border border-red-900/40 bg-black/35 p-3 text-sm">
                     <p>선 플레이어 제출: {currentRound?.lead_submitted ? "완료" : "대기"}</p>
                     <p>후 플레이어 제출: {currentRound?.follow_submitted ? "완료" : "대기"}</p>
@@ -1815,42 +1799,36 @@ export function BlackWhiteOnline() {
                     {revealedRoundRows.length === 0 && <p>공개할 라운드 데이터가 없습니다.</p>}
                     {revealedRoundRows.length > 0 && (
                       <>
-                        <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
-                          <p className="text-xs font-bold">{hostName}</p>
-                          {ALL_TILES.map((roundNo) => {
-                            const row = revealedRoundRows.find((r) => r.roundNo === roundNo);
-                            const round = rounds.find((r) => r.round_number === roundNo);
-                            const resultBorder = round ? getRoundResultBorder(round, room.host_id) : "border-slate-500/60";
-                            const tileClassName = getTileColorClass(row?.hostTile ?? null);
-                            return (
-                              <div
-                                key={`reveal-host-${roundNo}`}
-                                className={`h-8 rounded border-2 ${tileClassName} ${resultBorder} flex items-center justify-center text-sm font-black`}
-                                title={row?.hostTile !== null && row?.hostTile !== undefined ? `${roundNo}라운드: ${row.hostTile}` : `${roundNo}라운드: 미제출`}
-                              >
-                                {row?.hostTile ?? "-"}
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
-                          <p className="text-xs font-bold">{guestName}</p>
-                          {ALL_TILES.map((roundNo) => {
-                            const row = revealedRoundRows.find((r) => r.roundNo === roundNo);
-                            const round = rounds.find((r) => r.round_number === roundNo);
-                            const resultBorder = round && room.guest_id ? getRoundResultBorder(round, room.guest_id) : "border-slate-500/60";
-                            const tileClassName = getTileColorClass(row?.guestTile ?? null);
-                            return (
-                              <div
-                                key={`reveal-guest-${roundNo}`}
-                                className={`h-8 rounded border-2 ${tileClassName} ${resultBorder} flex items-center justify-center text-sm font-black`}
-                                title={row?.guestTile !== null && row?.guestTile !== undefined ? `${roundNo}라운드: ${row.guestTile}` : `${roundNo}라운드: 미제출`}
-                              >
-                                {row?.guestTile ?? "-"}
-                              </div>
-                            );
-                          })}
-                        </div>
+                        {(myRole === "host"
+                          ? [
+                            { key: "guest", label: guestName, playerId: room.guest_id ?? null },
+                            { key: "host", label: hostName, playerId: room.host_id },
+                          ]
+                          : [
+                            { key: "host", label: hostName, playerId: room.host_id },
+                            { key: "guest", label: guestName, playerId: room.guest_id ?? null },
+                          ]
+                        ).map(({ key, label, playerId }) => (
+                          <div key={`reveal-row-${key}`} className="grid grid-cols-[52px_repeat(9,minmax(0,1fr))] gap-1">
+                            <p className="text-xs font-bold">{label}</p>
+                            {ALL_TILES.map((roundNo) => {
+                              const row = revealedRoundRows.find((r) => r.roundNo === roundNo);
+                              const round = rounds.find((r) => r.round_number === roundNo);
+                              const resultBorder = round ? getRoundResultBorder(round, playerId) : "border-slate-500/60";
+                              const tileValue = key === "host" ? row?.hostTile ?? null : row?.guestTile ?? null;
+                              const tileClassName = getTileColorClass(tileValue);
+                              return (
+                                <div
+                                  key={`reveal-${key}-${roundNo}`}
+                                  className={`h-8 rounded border-4 ${tileClassName} ${resultBorder} flex items-center justify-center text-sm font-black`}
+                                  title={tileValue !== null ? `${roundNo}라운드: ${tileValue}` : `${roundNo}라운드: 미제출`}
+                                >
+                                  {tileValue ?? "-"}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ))}
                       </>
                     )}
                   </div>
