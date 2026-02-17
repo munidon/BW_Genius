@@ -9,9 +9,10 @@ import { supabase } from "@/lib/supabase";
 type RoomStatus = "waiting" | "playing" | "finished";
 type RoundPhase = "idle" | "await_lead" | "await_follow" | "resolved" | "finished";
 type RoundResult = "HOST_WIN" | "GUEST_WIN" | "DRAW";
-type BgmTrack = "waiting" | "playing";
+type BgmTrack = "lobby" | "waiting" | "playing";
 type SfxKey = "uiClick" | "tileSubmit" | "readyConfirm" | "gameStart" | "victory" | "defeat" | "draw" | "leave" | "error";
 
+const LOBBY_BGM_SRC = "/audio/bgm/lobby-loop.mp3";
 const WAITING_BGM_SRC = "/audio/bgm/waiting-loop.mp3";
 const PLAYING_BGM_SRC = "/audio/bgm/playing-loop.mp3";
 const BGM_VOLUME = 0.45;
@@ -159,6 +160,7 @@ export function BlackWhiteOnline() {
   const [lastRoomSnapshot, setLastRoomSnapshot] = useState<BwRoom | null>(null);
   const [realtimeSubscribed, setRealtimeSubscribed] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(true);
+  const lobbyBgmRef = useRef<HTMLAudioElement | null>(null);
   const waitingBgmRef = useRef<HTMLAudioElement | null>(null);
   const playingBgmRef = useRef<HTMLAudioElement | null>(null);
   const activeBgmTrackRef = useRef<BgmTrack | null>(null);
@@ -178,7 +180,7 @@ export function BlackWhiteOnline() {
   const cleanupTriggeredUsersRef = useRef<Set<string>>(new Set());
 
   const inRoom = Boolean(room);
-  const desiredBgmTrack: BgmTrack | null = room ? (room.status === "playing" ? "playing" : "waiting") : null;
+  const desiredBgmTrack: BgmTrack = room ? (room.status === "playing" ? "playing" : "waiting") : "lobby";
 
   useEffect(() => {
     userIdRef.current = userId;
@@ -189,6 +191,7 @@ export function BlackWhiteOnline() {
   }, [room]);
 
   const getAudioByTrack = useCallback((track: BgmTrack | null) => {
+    if (track === "lobby") return lobbyBgmRef.current;
     if (track === "waiting") return waitingBgmRef.current;
     if (track === "playing") return playingBgmRef.current;
     return null;
@@ -221,6 +224,7 @@ export function BlackWhiteOnline() {
     if (activeAudio && Number.isFinite(activeAudio.currentTime)) {
       lastBgmPositionRef.current = activeAudio.currentTime;
     }
+    lobbyBgmRef.current?.pause();
     waitingBgmRef.current?.pause();
     playingBgmRef.current?.pause();
     activeBgmTrackRef.current = null;
@@ -292,6 +296,11 @@ export function BlackWhiteOnline() {
   }, [desiredBgmTrack, switchBgmTrack]);
 
   useEffect(() => {
+    const lobbyAudio = new Audio(LOBBY_BGM_SRC);
+    lobbyAudio.loop = true;
+    lobbyAudio.preload = "auto";
+    lobbyAudio.volume = BGM_VOLUME;
+
     const waitingAudio = new Audio(WAITING_BGM_SRC);
     waitingAudio.loop = true;
     waitingAudio.preload = "auto";
@@ -302,17 +311,22 @@ export function BlackWhiteOnline() {
     playingAudio.preload = "auto";
     playingAudio.volume = BGM_VOLUME;
 
+    lobbyBgmRef.current = lobbyAudio;
     waitingBgmRef.current = waitingAudio;
     playingBgmRef.current = playingAudio;
+    lobbyAudio.load();
     waitingAudio.load();
     playingAudio.load();
     void switchBgmTrack(desiredBgmTrackRef.current);
 
     return () => {
+      lobbyAudio.pause();
       waitingAudio.pause();
       playingAudio.pause();
+      lobbyAudio.currentTime = 0;
       waitingAudio.currentTime = 0;
       playingAudio.currentTime = 0;
+      lobbyBgmRef.current = null;
       waitingBgmRef.current = null;
       playingBgmRef.current = null;
       activeBgmTrackRef.current = null;
@@ -435,6 +449,14 @@ export function BlackWhiteOnline() {
       return { roundNo, hostTile, guestTile, roundResult };
     });
   }, [room, rounds, revealedRows]);
+  const finalRoundSubmissionCount = useMemo(() => {
+    if (!room || room.status !== "finished") return null;
+    if (revealsLoadedForRoomId !== room.id) return null;
+    return revealedRows.filter((r) => r.round_number === room.current_round).length;
+  }, [room, revealedRows, revealsLoadedForRoomId]);
+  const finishedByForfeit = useMemo(() => {
+    return finalRoundSubmissionCount !== null && finalRoundSubmissionCount < 2;
+  }, [finalRoundSubmissionCount]);
 
   const myScore = useMemo(() => {
     if (!room || !myRole) return 0;
@@ -692,6 +714,7 @@ export function BlackWhiteOnline() {
     const roomSelect =
       "id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id,updated_at";
     const currentRoomId = roomRef.current?.id ?? null;
+    const localRoom = roomRef.current;
 
     if (currentRoomId) {
       const { data: currentRoomData } = await supabase
@@ -701,16 +724,35 @@ export function BlackWhiteOnline() {
         .maybeSingle();
       if (isObsolete()) return;
       if (currentRoomData) {
-        await handleRoomSync(currentRoomData as BwRoom);
-        return;
+        const latestById = currentRoomData as BwRoom;
+        if (!localRoom || localRoom.id !== latestById.id) {
+          await handleRoomSync(latestById);
+          return;
+        }
+
+        const localUpdatedAt = Date.parse(localRoom.updated_at);
+        const latestUpdatedAt = Date.parse(latestById.updated_at);
+        if (
+          !Number.isFinite(localUpdatedAt) ||
+          !Number.isFinite(latestUpdatedAt) ||
+          latestUpdatedAt > localUpdatedAt
+        ) {
+          await handleRoomSync(latestById);
+          return;
+        }
+
+        if (localRoom.status !== "finished") {
+          return;
+        }
       }
     }
 
+    const statusFilter = localRoom?.status === "finished" ? ["playing", "waiting", "finished"] : ["playing", "waiting"];
     const { data } = await supabase
       .from("bw_rooms")
       .select(roomSelect)
       .or(`host_id.eq.${uid},guest_id.eq.${uid}`)
-      .in("status", ["playing", "waiting"])
+      .in("status", statusFilter)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -819,8 +861,13 @@ export function BlackWhiteOnline() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "bw_rooms", filter: `id=eq.${room.id}` },
-        async () => {
-          await loadLatestRoom(uid);
+        async (payload) => {
+          const next = payload.new as BwRoom | null;
+          if (next?.id) {
+            await handleRoomSync(next);
+          } else {
+            await loadLatestRoom(uid);
+          }
         }
       )
       .on(
@@ -876,27 +923,26 @@ export function BlackWhiteOnline() {
       Boolean(room.winner_id);
 
     if (justFinishedWithWinner && userId && room.winner_id === userId) {
-      if (revealsLoadedForRoomId !== room.id) return;
-      const submissionsInFinalRound = revealedRows.filter((r) => r.round_number === room.current_round).length;
-      const finishedBySurrender = submissionsInFinalRound < 2;
-      if (finishedBySurrender) {
+      if (finalRoundSubmissionCount === null) return;
+      if (finishedByForfeit) {
         setNotice("상대 플레이어가 기권했습니다. 종료 화면에서 라운드 숫자를 확인할 수 있습니다.");
         setLeaveConfirmOpen(false);
       }
     }
 
     setLastRoomSnapshot(room);
-  }, [room, userId, lastRoomSnapshot, revealedRows, revealsLoadedForRoomId]);
+  }, [room, userId, lastRoomSnapshot, finalRoundSubmissionCount, finishedByForfeit]);
 
   useEffect(() => {
     if (!userId || !room) return;
     const waitingRoom = room.status === "waiting";
-    if (!waitingRoom && realtimeSubscribed && isPageVisible) return;
+    const finishedRoom = room.status === "finished";
+    if (!waitingRoom && !finishedRoom && realtimeSubscribed && isPageVisible) return;
 
     loadLatestRoom(userId);
     loadMyRecord(userId);
 
-    const refreshIntervalMs = waitingRoom ? 1000 : 5000;
+    const refreshIntervalMs = waitingRoom || finishedRoom ? 1000 : 5000;
     const t = setInterval(() => {
       loadLatestRoom(userId);
       loadMyRecord(userId);
@@ -1677,7 +1723,7 @@ export function BlackWhiteOnline() {
                   </div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {myRole === "host" && (
+                  {myRole === "host" && !finishedByForfeit && (
                     <button type="button" onClick={resetRoom} className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black">
                       Room으로 복귀
                     </button>
@@ -1689,7 +1735,16 @@ export function BlackWhiteOnline() {
                   >
                     게임 나가기
                   </button>
-                  {myRole !== "host" && <p className="text-sm text-red-100/70">호스트가 Room 복귀 버튼을 누르면 다음 게임을 준비할 수 있습니다.</p>}
+                  {myRole === "host" && finishedByForfeit && (
+                    <p className="text-sm text-red-100/70">상대가 기권 후 나가 Room으로 복귀할 수 없습니다.</p>
+                  )}
+                  {myRole !== "host" && (
+                    <p className="text-sm text-red-100/70">
+                      {finishedByForfeit
+                        ? "상대가 기권 후 나가 Room으로 복귀할 수 없습니다."
+                        : "호스트가 Room 복귀 버튼을 누르면 다음 게임을 준비할 수 있습니다."}
+                    </p>
+                  )}
                 </div>
               </div>
             )}
