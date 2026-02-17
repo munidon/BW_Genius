@@ -155,6 +155,8 @@ export function BlackWhiteOnline() {
   const [revealedRows, setRevealedRows] = useState<RoomRevealRow[]>([]);
   const [revealsLoadedForRoomId, setRevealsLoadedForRoomId] = useState<string | null>(null);
   const [lastRoomSnapshot, setLastRoomSnapshot] = useState<BwRoom | null>(null);
+  const [realtimeSubscribed, setRealtimeSubscribed] = useState(false);
+  const [isPageVisible, setIsPageVisible] = useState(true);
   const waitingBgmRef = useRef<HTMLAudioElement | null>(null);
   const playingBgmRef = useRef<HTMLAudioElement | null>(null);
   const activeBgmTrackRef = useRef<BgmTrack | null>(null);
@@ -574,11 +576,19 @@ export function BlackWhiteOnline() {
 
   const loadLatestRoom = async (uid: string) => {
     if (!supabase) return;
+
+    // Opportunistic cleanup for stale finished rooms left by abrupt tab/session exits.
+    const { error: cleanupError } = await supabase.rpc("bw_cleanup_stale_finished_rooms");
+    if (cleanupError && cleanupError.code !== "42883") {
+      console.warn("stale room cleanup failed", cleanupError.message);
+    }
+
     const { data } = await supabase
       .from("bw_rooms")
       .select("id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id")
       .or(`host_id.eq.${uid},guest_id.eq.${uid}`)
-      .order("created_at", { ascending: false })
+      .in("status", ["playing", "waiting"])
+      .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
@@ -590,6 +600,9 @@ export function BlackWhiteOnline() {
     setRoom(null);
     setRounds([]);
     setMySubmissions([]);
+    setRevealedRows([]);
+    setRevealsLoadedForRoomId(null);
+    setLastRoomSnapshot(null);
   };
 
   const syncMyNickname = async (uid: string, fallback?: string) => {
@@ -649,8 +662,20 @@ export function BlackWhiteOnline() {
   }, []);
 
   useEffect(() => {
+    const handleVisibility = () => {
+      setIsPageVisible(!document.hidden);
+    };
+    handleVisibility();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!supabase || !room) return;
     const client = supabase;
+    setRealtimeSubscribed(false);
 
     const channel = client
       .channel(`bw-room-${room.id}`)
@@ -678,9 +703,12 @@ export function BlackWhiteOnline() {
           await loadMySubmissions(room.id);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        setRealtimeSubscribed(status === "SUBSCRIBED");
+      });
 
     return () => {
+      setRealtimeSubscribed(false);
       client.removeChannel(channel);
     };
   }, [room?.id, userId]);
@@ -712,12 +740,18 @@ export function BlackWhiteOnline() {
 
   useEffect(() => {
     if (!userId || !room) return;
+    if (realtimeSubscribed && isPageVisible) return;
+
+    loadLatestRoom(userId);
+    loadMyRecord(userId);
+
     const t = setInterval(() => {
       loadLatestRoom(userId);
       loadMyRecord(userId);
-    }, 2000);
+    }, 20000);
+
     return () => clearInterval(t);
-  }, [userId, room?.id]);
+  }, [userId, room?.id, realtimeSubscribed, isPageVisible]);
 
   useEffect(() => {
     if (!room || room.status !== "finished") {
@@ -768,13 +802,6 @@ export function BlackWhiteOnline() {
     setLoading(true);
 
     const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/` : undefined;
-    if (typeof window !== "undefined") {
-      console.info("[auth] signInWithGoogle redirectTo", {
-        origin: window.location.origin,
-        href: window.location.href,
-        redirectTo,
-      });
-    }
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo },

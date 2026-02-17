@@ -8,7 +8,7 @@ Last updated: 2026-02-17 (America/Los_Angeles)
 
 ## P0 (즉시)
 
-- [ ] RPC 익명 실행 차단 + 함수 초반 인증 가드 추가
+- [x] RPC 익명 실행 차단 + 함수 초반 인증 가드 추가
   - 문제 요약: anon 토큰으로도 RPC 본문이 실행되어 `401/403` 대신 비즈니스 예외(`ROOM_NOT_FOUND`)가 반환된다.
   - 대상 문서/함수:
     - `/Users/hhj/love_letters/docs/supabase-schema.sql:413` (`bw_submit_tile`)
@@ -27,7 +27,7 @@ Last updated: 2026-02-17 (America/Los_Angeles)
 
 ## P1 (당장 수정)
 
-- [ ] 린트 파이프라인 복구 (Next.js 16 호환)
+- [x] 린트 파이프라인 복구 (Next.js 16 호환)
   - 문제 요약: `/Users/hhj/love_letters/package.json:9`의 `next lint`가 더 이상 유효하지 않아 `npm run lint` 실패.
   - 패치 항목:
     - lint 스크립트를 ESLint CLI 기반으로 교체.
@@ -38,7 +38,7 @@ Last updated: 2026-02-17 (America/Los_Angeles)
     - 로컬 `npm run lint` 성공.
     - CI에서 lint 단계 성공.
 
-- [ ] Supabase Auth 세션 지속/리프레시 활성화
+- [x] Supabase Auth 세션 지속/리프레시 활성화
   - 문제 요약: `/Users/hhj/love_letters/lib/supabase.ts:10`, `/Users/hhj/love_letters/lib/supabase.ts:11`에서 세션 지속/자동 갱신이 꺼져 있다.
   - 패치 항목:
     - `persistSession`, `autoRefreshToken` 정책을 재설정(일반 사용자 로그인 유지 기준으로 활성화).
@@ -47,7 +47,7 @@ Last updated: 2026-02-17 (America/Los_Angeles)
     - OAuth 로그인 후 새로고침해도 세션 유지.
     - 장시간 탭 유지 시 토큰 자동 갱신 동작.
 
-- [ ] Supabase SQL 문서와 실제 스키마 드리프트 해소
+- [x] Supabase SQL 문서와 실제 스키마 드리프트 해소
   - 문제 요약: 코드에서는 `wins/losses`를 사용하지만 스키마 문서엔 누락.
   - 대상:
     - 코드 참조: `/Users/hhj/love_letters/components/black-white-online.tsx:468`
@@ -61,7 +61,7 @@ Last updated: 2026-02-17 (America/Los_Angeles)
     - 신규 DB에 문서 SQL만 실행해도 앱 쿼리 컬럼과 1:1 일치.
     - 문서 기준 재배포 시 컬럼 누락 오류 없음.
 
-- [ ] 종료된 과거 방으로 자동 재입장되는 문제 수정 (stale finished room)
+- [x] 종료된 과거 방으로 자동 재입장되는 문제 수정 (stale finished room)
   - 문제 요약: 재로그인 시 최신 활성 방이 아니라 과거 `finished` 방으로 복귀되는 케이스가 발생한다.
   - 재현 시나리오:
     - A-B 경기 종료 -> 양쪽 이탈
@@ -82,7 +82,7 @@ Last updated: 2026-02-17 (America/Los_Angeles)
 
 ## P2 (빠른 정리)
 
-- [ ] 규칙 문서와 구현의 동점 처리 정책 일치
+- [x] 규칙 문서와 구현의 동점 처리 정책 일치
   - 문제 요약: 규칙 문서는 연장전 요구, 구현/README는 9라운드 종료.
   - 대상:
     - 규칙 문서: `/Users/hhj/love_letters/docs/black-white-rules.md:25`
@@ -94,7 +94,7 @@ Last updated: 2026-02-17 (America/Los_Angeles)
   - 완료 기준:
     - 규칙 문서, README, SQL 구현의 종료 조건이 완전히 동일.
 
-- [ ] Realtime 사용 시 과도한 2초 폴링 제거
+- [x] Realtime 사용 시 과도한 2초 폴링 제거
   - 문제 요약: Realtime 구독 중에도 2초 주기 폴링을 병행해 호출량이 증가한다.
   - 대상:
     - Realtime 구독: `/Users/hhj/love_letters/components/black-white-online.tsx:656`
@@ -108,15 +108,15 @@ Last updated: 2026-02-17 (America/Los_Angeles)
 
 ## P3 (정리 권장)
 
-- [ ] 로그인 디버그 로그 제거
+- [x] 로그인 디버그 로그 제거
   - 대상: `/Users/hhj/love_letters/components/black-white-online.tsx:772`
   - 패치 항목: OAuth 디버그 `console.info` 제거 또는 개발 모드 조건부 로깅으로 제한.
   - 완료 기준: 프로덕션 환경에서 인증 관련 디버그 로그 미출력.
 
 ## 권장 실행 순서
 
-- [ ] 1단계: P0 RPC 권한/인증 경계
-- [ ] 2단계: P1 lint 복구
-- [ ] 3단계: P1 세션 정책 + 스키마 문서 동기화 + stale finished room 정리
-- [ ] 4단계: P2 규칙 정합성 + 폴링 최적화
-- [ ] 5단계: P3 로그 정리
+- [x] 1단계: P0 RPC 권한/인증 경계
+- [x] 2단계: P1 lint 복구
+- [x] 3단계: P1 세션 정책 + 스키마 문서 동기화 + stale finished room 정리
+- [x] 4단계: P2 규칙 정합성 + 폴링 최적화
+- [x] 5단계: P3 로그 정리

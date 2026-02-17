@@ -6,6 +6,8 @@ create extension if not exists pgcrypto;
 create table if not exists public.bw_profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   nickname text not null check (char_length(nickname) between 2 and 20),
+  wins int not null default 0 check (wins >= 0),
+  losses int not null default 0 check (losses >= 0),
   created_at timestamptz not null default now()
 );
 
@@ -57,6 +59,10 @@ create table if not exists public.bw_submissions (
 alter table public.bw_rounds_public
   add column if not exists lead_tile_color text check (lead_tile_color in ('black', 'white')),
   add column if not exists follow_tile_color text check (follow_tile_color in ('black', 'white'));
+
+alter table public.bw_profiles
+  add column if not exists wins int not null default 0,
+  add column if not exists losses int not null default 0;
 
 create index if not exists idx_bw_rooms_code on public.bw_rooms(room_code);
 create index if not exists idx_bw_rounds_public_room on public.bw_rounds_public(room_id, round_number);
@@ -393,6 +399,10 @@ declare
   v_next_follow uuid;
   v_is_host boolean;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   if p_tile < 1 or p_tile > 9 then
     raise exception 'INVALID_TILE';
   end if;
@@ -410,7 +420,8 @@ begin
     raise exception 'ROOM_NOT_PLAYING';
   end if;
 
-  if auth.uid() not in (v_room.host_id, v_room.guest_id) then
+  if auth.uid() is distinct from v_room.host_id
+     and auth.uid() is distinct from v_room.guest_id then
     raise exception 'NOT_ROOM_MEMBER';
   end if;
 
@@ -539,6 +550,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_submit_tile(uuid, smallint) from anon, public;
 grant execute on function public.bw_submit_tile(uuid, smallint) to authenticated;
 
 create or replace function public.bw_reset_room(p_room_id uuid)
@@ -593,6 +605,10 @@ as $$
 declare
   v_room public.bw_rooms;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   select * into v_room
   from public.bw_rooms
   where id = p_room_id
@@ -602,7 +618,8 @@ begin
     raise exception 'ROOM_NOT_FOUND';
   end if;
 
-  if auth.uid() not in (v_room.host_id, v_room.guest_id) then
+  if auth.uid() is distinct from v_room.host_id
+     and auth.uid() is distinct from v_room.guest_id then
     raise exception 'NOT_ROOM_MEMBER';
   end if;
 
@@ -657,7 +674,38 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_leave_room(uuid) from anon, public;
 grant execute on function public.bw_leave_room(uuid) to authenticated;
+
+create or replace function public.bw_cleanup_stale_finished_rooms(
+  p_max_age interval default interval '12 hours'
+)
+returns int
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_deleted int;
+begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
+  with deleted as (
+    delete from public.bw_rooms r
+    where r.status = 'finished'
+      and r.updated_at < now() - p_max_age
+    returning 1
+  )
+  select count(*) into v_deleted from deleted;
+
+  return v_deleted;
+end;
+$$;
+
+revoke execute on function public.bw_cleanup_stale_finished_rooms(interval) from anon, public;
+grant execute on function public.bw_cleanup_stale_finished_rooms(interval) to authenticated;
 
 create or replace function public.bw_get_room_reveals(p_room_id uuid)
 returns table(round_number int, player_id uuid, tile smallint)
@@ -668,6 +716,10 @@ as $$
 declare
   v_room public.bw_rooms;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   select * into v_room
   from public.bw_rooms
   where id = p_room_id;
@@ -676,7 +728,8 @@ begin
     raise exception 'ROOM_NOT_FOUND';
   end if;
 
-  if auth.uid() not in (v_room.host_id, v_room.guest_id) then
+  if auth.uid() is distinct from v_room.host_id
+     and auth.uid() is distinct from v_room.guest_id then
     raise exception 'NOT_ROOM_MEMBER';
   end if;
 
@@ -692,6 +745,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_get_room_reveals(uuid) from anon, public;
 grant execute on function public.bw_get_room_reveals(uuid) to authenticated;
 
 create or replace function public.bw_get_room_member_record(p_room_id uuid, p_player_id uuid)
@@ -706,6 +760,10 @@ declare
   v_losses int;
   v_total int;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   select * into v_room
   from public.bw_rooms
   where id = p_room_id;
@@ -714,14 +772,18 @@ begin
     raise exception 'ROOM_NOT_FOUND';
   end if;
 
-  if auth.uid() not in (v_room.host_id, v_room.guest_id) then
+  if auth.uid() is distinct from v_room.host_id
+     and auth.uid() is distinct from v_room.guest_id then
     raise exception 'NOT_ROOM_MEMBER';
   end if;
 
-  if p_player_id not in (v_room.host_id, v_room.guest_id) then
+  if p_player_id is distinct from v_room.host_id
+     and p_player_id is distinct from v_room.guest_id then
     raise exception 'PLAYER_NOT_IN_ROOM';
   end if;
 
+  -- 전적 집계 기준(authoritative): finished 방을 직접 집계한다.
+  -- bw_profiles.wins/losses는 앱 조회용 캐시 컬럼이며, 운영 시 RPC/트리거/배치 중 한 곳에서 동기화 책임을 둔다.
   select count(*) into v_wins
   from public.bw_rooms r
   where r.status = 'finished'
@@ -745,4 +807,5 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_get_room_member_record(uuid, uuid) from anon, public;
 grant execute on function public.bw_get_room_member_record(uuid, uuid) to authenticated;
