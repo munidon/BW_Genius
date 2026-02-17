@@ -1,13 +1,41 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ALL_TILES, tileColor } from "@/lib/game";
 import { supabase } from "@/lib/supabase";
 
 type RoomStatus = "waiting" | "playing" | "finished";
 type RoundPhase = "idle" | "await_lead" | "await_follow" | "resolved" | "finished";
 type RoundResult = "HOST_WIN" | "GUEST_WIN" | "DRAW";
+type BgmTrack = "waiting" | "playing";
+type SfxKey = "uiClick" | "tileSubmit" | "readyConfirm" | "gameStart" | "victory" | "defeat" | "draw" | "leave" | "error";
+
+const WAITING_BGM_SRC = "/audio/bgm/waiting-loop.mp3";
+const PLAYING_BGM_SRC = "/audio/bgm/playing-loop.mp3";
+const BGM_VOLUME = 0.45;
+const SFX_SOURCES: Record<SfxKey, string> = {
+  uiClick: "/audio/sfx/current/ui-click.ogg",
+  tileSubmit: "/audio/sfx/current/tile-submit.ogg",
+  readyConfirm: "/audio/sfx/current/ready-confirm.ogg",
+  gameStart: "/audio/sfx/current/game-start.ogg",
+  victory: "/audio/sfx/current/victory.ogg",
+  defeat: "/audio/sfx/current/defeat.ogg",
+  draw: "/audio/sfx/current/draw.ogg",
+  leave: "/audio/sfx/current/leave.ogg",
+  error: "/audio/sfx/current/error.ogg",
+};
+const SFX_VOLUME: Record<SfxKey, number> = {
+  uiClick: 0.55,
+  tileSubmit: 0.75,
+  readyConfirm: 0.7,
+  gameStart: 0.75,
+  victory: 0.75,
+  defeat: 0.8,
+  draw: 0.7,
+  leave: 0.65,
+  error: 0.7,
+};
 
 interface BwRoom {
   id: string;
@@ -127,13 +155,237 @@ export function BlackWhiteOnline() {
   const [revealedRows, setRevealedRows] = useState<RoomRevealRow[]>([]);
   const [revealsLoadedForRoomId, setRevealsLoadedForRoomId] = useState<string | null>(null);
   const [lastRoomSnapshot, setLastRoomSnapshot] = useState<BwRoom | null>(null);
+  const waitingBgmRef = useRef<HTMLAudioElement | null>(null);
+  const playingBgmRef = useRef<HTMLAudioElement | null>(null);
+  const activeBgmTrackRef = useRef<BgmTrack | null>(null);
+  const desiredBgmTrackRef = useRef<BgmTrack | null>(null);
+  const audioUnlockedRef = useRef(false);
+  const lastBgmPositionRef = useRef(0);
+  const sfxMapRef = useRef<Partial<Record<SfxKey, HTMLAudioElement>>>({});
+  const previousRoomStatusRef = useRef<RoomStatus | null>(null);
+  const previousNoticeRef = useRef("");
+  const previousErrorRef = useRef("");
 
   const inRoom = Boolean(room);
+  const desiredBgmTrack: BgmTrack | null = room ? (room.status === "playing" ? "playing" : "waiting") : null;
+
+  const getAudioByTrack = useCallback((track: BgmTrack | null) => {
+    if (track === "waiting") return waitingBgmRef.current;
+    if (track === "playing") return playingBgmRef.current;
+    return null;
+  }, []);
+
+  const seekAudioWithCarryTime = useCallback((audio: HTMLAudioElement, carryTime: number) => {
+    if (!Number.isFinite(carryTime) || carryTime < 0) return;
+
+    const applySeek = () => {
+      const hasDuration = Number.isFinite(audio.duration) && audio.duration > 0;
+      const targetTime = hasDuration ? carryTime % audio.duration : carryTime;
+      if (!Number.isFinite(targetTime) || targetTime < 0) return;
+      try {
+        audio.currentTime = targetTime;
+      } catch {
+        // Some browsers can reject early seek calls before media is ready.
+      }
+    };
+
+    if (audio.readyState >= 1) {
+      applySeek();
+      return;
+    }
+
+    audio.addEventListener("loadedmetadata", applySeek, { once: true });
+  }, []);
+
+  const pauseAllBgm = useCallback(() => {
+    const activeAudio = getAudioByTrack(activeBgmTrackRef.current);
+    if (activeAudio && Number.isFinite(activeAudio.currentTime)) {
+      lastBgmPositionRef.current = activeAudio.currentTime;
+    }
+    waitingBgmRef.current?.pause();
+    playingBgmRef.current?.pause();
+    activeBgmTrackRef.current = null;
+  }, [getAudioByTrack]);
+
+  const switchBgmTrack = useCallback(
+    async (nextTrack: BgmTrack | null) => {
+      if (!nextTrack) {
+        pauseAllBgm();
+        return;
+      }
+
+      const nextAudio = getAudioByTrack(nextTrack);
+      if (!nextAudio) return;
+
+      const currentTrack = activeBgmTrackRef.current;
+      const currentAudio = getAudioByTrack(currentTrack);
+
+      if (currentTrack === nextTrack) {
+        if (!audioUnlockedRef.current || !nextAudio.paused) return;
+        try {
+          await nextAudio.play();
+        } catch {
+          // Autoplay can remain blocked until a user gesture happens.
+        }
+        return;
+      }
+
+      let carryTime = lastBgmPositionRef.current;
+      if (currentAudio && Number.isFinite(currentAudio.currentTime)) {
+        carryTime = currentAudio.currentTime;
+      }
+
+      currentAudio?.pause();
+      lastBgmPositionRef.current = carryTime;
+      seekAudioWithCarryTime(nextAudio, carryTime);
+      activeBgmTrackRef.current = nextTrack;
+
+      if (!audioUnlockedRef.current) return;
+      try {
+        await nextAudio.play();
+      } catch {
+        // Autoplay can remain blocked until a user gesture happens.
+      }
+    },
+    [getAudioByTrack, pauseAllBgm, seekAudioWithCarryTime]
+  );
+
+  const playSfx = useCallback((key: SfxKey) => {
+    if (!audioUnlockedRef.current) return;
+    const audio = sfxMapRef.current[key];
+    if (!audio) return;
+    try {
+      audio.currentTime = 0;
+      void audio.play();
+    } catch {
+      // Browsers can still reject rapid successive calls in strict autoplay conditions.
+    }
+  }, []);
 
   const currentRound = useMemo(() => {
     if (!room || room.current_round <= 0) return null;
     return rounds.find((r) => r.round_number === room.current_round) ?? null;
   }, [room, rounds]);
+
+  useEffect(() => {
+    desiredBgmTrackRef.current = desiredBgmTrack;
+    void switchBgmTrack(desiredBgmTrack);
+  }, [desiredBgmTrack, switchBgmTrack]);
+
+  useEffect(() => {
+    const waitingAudio = new Audio(WAITING_BGM_SRC);
+    waitingAudio.loop = true;
+    waitingAudio.preload = "auto";
+    waitingAudio.volume = BGM_VOLUME;
+
+    const playingAudio = new Audio(PLAYING_BGM_SRC);
+    playingAudio.loop = true;
+    playingAudio.preload = "auto";
+    playingAudio.volume = BGM_VOLUME;
+
+    waitingBgmRef.current = waitingAudio;
+    playingBgmRef.current = playingAudio;
+    waitingAudio.load();
+    playingAudio.load();
+    void switchBgmTrack(desiredBgmTrackRef.current);
+
+    return () => {
+      waitingAudio.pause();
+      playingAudio.pause();
+      waitingAudio.currentTime = 0;
+      playingAudio.currentTime = 0;
+      waitingBgmRef.current = null;
+      playingBgmRef.current = null;
+      activeBgmTrackRef.current = null;
+    };
+  }, [switchBgmTrack]);
+
+  useEffect(() => {
+    const sfxEntries = Object.entries(SFX_SOURCES) as [SfxKey, string][];
+    const loaded: Partial<Record<SfxKey, HTMLAudioElement>> = {};
+    sfxEntries.forEach(([key, src]) => {
+      const audio = new Audio(src);
+      audio.preload = "auto";
+      audio.volume = SFX_VOLUME[key];
+      audio.load();
+      loaded[key] = audio;
+    });
+    sfxMapRef.current = loaded;
+
+    return () => {
+      Object.values(loaded).forEach((audio) => {
+        audio?.pause();
+        if (audio) audio.currentTime = 0;
+      });
+      sfxMapRef.current = {};
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      audioUnlockedRef.current = true;
+      void switchBgmTrack(desiredBgmTrackRef.current);
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+
+    window.addEventListener("pointerdown", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, [switchBgmTrack]);
+
+  useEffect(() => {
+    const playButtonClickSfx = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("button")) {
+        playSfx("uiClick");
+      }
+    };
+    window.addEventListener("click", playButtonClickSfx, true);
+    return () => {
+      window.removeEventListener("click", playButtonClickSfx, true);
+    };
+  }, [playSfx]);
+
+  useEffect(() => {
+    if (!room) {
+      previousRoomStatusRef.current = null;
+      return;
+    }
+
+    const prevStatus = previousRoomStatusRef.current;
+    if (prevStatus === "waiting" && room.status === "playing") {
+      playSfx("gameStart");
+    }
+    if (prevStatus === "playing" && room.status === "finished") {
+      if (!room.winner_id) {
+        playSfx("draw");
+      } else if (userId && room.winner_id === userId) {
+        playSfx("victory");
+      } else {
+        playSfx("defeat");
+      }
+    }
+    previousRoomStatusRef.current = room.status;
+  }, [room, userId, playSfx]);
+
+  useEffect(() => {
+    if (notice && notice !== previousNoticeRef.current) {
+      playSfx("readyConfirm");
+    }
+    previousNoticeRef.current = notice;
+  }, [notice, playSfx]);
+
+  useEffect(() => {
+    if (error && error !== previousErrorRef.current) {
+      playSfx("error");
+    }
+    previousErrorRef.current = error;
+  }, [error, playSfx]);
 
   const myRole = useMemo(() => {
     if (!room || !userId) return null;
@@ -643,6 +895,7 @@ export function BlackWhiteOnline() {
     }
     if (data) {
       await handleRoomSync(data as BwRoom);
+      playSfx("readyConfirm");
     }
     setLoading(false);
   };
@@ -667,6 +920,7 @@ export function BlackWhiteOnline() {
     if (!supabase || !room || !myTurn || submittedThisRound) return;
 
     setFlyingTile(tile);
+    playSfx("tileSubmit");
     setTimeout(() => setFlyingTile(null), 560);
 
     setLoading(true);
@@ -700,6 +954,7 @@ export function BlackWhiteOnline() {
     }
     if (data) {
       await handleRoomSync(data as BwRoom);
+      playSfx("readyConfirm");
     }
     setLoading(false);
   };
@@ -730,12 +985,14 @@ export function BlackWhiteOnline() {
     setRoom(null);
     setRounds([]);
     setMySubmissions([]);
+    playSfx("leave");
     setNotice(isPlaying ? "게임에서 나가 기권 처리되었습니다." : "Room에서 나갔습니다.");
     setLoading(false);
   };
 
   const leaveFinishedGameToLobby = () => {
     setError("");
+    playSfx("leave");
     setNotice("게임 화면에서 나왔습니다.");
     setRoom(null);
     setRounds([]);
