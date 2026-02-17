@@ -686,6 +686,7 @@ as $$
 declare
   v_room public.bw_rooms;
   v_after public.bw_rooms;
+  v_loser_id uuid;
 begin
   if auth.uid() is null then
     raise exception 'AUTH_REQUIRED';
@@ -765,6 +766,26 @@ begin
           lead_player_id = null
       where id = p_room_id
       returning * into v_after;
+    end if;
+  end if;
+
+  if v_room.status = 'playing'
+     and v_after.status = 'finished'
+     and v_after.winner_id is not null then
+    v_loser_id := case
+      when v_after.winner_id = v_room.host_id then v_room.guest_id
+      when v_after.winner_id = v_room.guest_id then v_room.host_id
+      else null
+    end;
+
+    update public.bw_profiles
+    set wins = wins + 1
+    where id = v_after.winner_id;
+
+    if v_loser_id is not null then
+      update public.bw_profiles
+      set losses = losses + 1
+      where id = v_loser_id;
     end if;
   end if;
 

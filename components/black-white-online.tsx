@@ -15,6 +15,11 @@ type SfxKey = "uiClick" | "tileSubmit" | "readyConfirm" | "gameStart" | "victory
 const LOBBY_BGM_SRC = "/audio/bgm/lobby-loop.mp3";
 const WAITING_BGM_SRC = "/audio/bgm/waiting-loop.mp3";
 const PLAYING_BGM_SRC = "/audio/bgm/playing-loop.mp3";
+const START_ORDER_COIN_FRONT_SRC = "/images/start-order/coin-front.jpg";
+const START_ORDER_COIN_BACK_SRC = "/images/start-order/coin-back.jpg";
+
+const STARTER_COIN_SPIN_DURATION_SEC = 2.25;
+const STARTER_COIN_RESULT_HOLD_MS = 1500;
 const BGM_VOLUME = 0.45;
 const SFX_SOURCES: Record<SfxKey, string> = {
   uiClick: "/audio/sfx/current/ui-click.ogg",
@@ -136,6 +141,103 @@ function AnimatedVerdict({ text }: { text: string }) {
   );
 }
 
+function StarterCoinOverlay({ role }: { role: "lead" | "follow" }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const finalRotation = role === "lead" ? 1440 : 1620;
+  const roleLabel = role === "lead" ? "先 플레이어" : "後 플레이어";
+
+  useEffect(() => {
+    let active = true;
+    let loaded = 0;
+    const onLoad = () => {
+      loaded += 1;
+      if (active && loaded === 2) setImageFailed(false);
+    };
+    const onError = () => {
+      if (active) setImageFailed(true);
+    };
+
+    const frontProbe = new window.Image();
+    frontProbe.onload = onLoad;
+    frontProbe.onerror = onError;
+    frontProbe.src = START_ORDER_COIN_FRONT_SRC;
+
+    const backProbe = new window.Image();
+    backProbe.onload = onLoad;
+    backProbe.onerror = onError;
+    backProbe.src = START_ORDER_COIN_BACK_SRC;
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-sm"
+    >
+      <div className="flex flex-col items-center gap-5">
+        <motion.div
+          initial={{ rotateY: 0, scale: 0.85, opacity: 0.7 }}
+          animate={{ rotateY: [0, 900, 1260, finalRotation], scale: [0.85, 1.04, 1], opacity: [0.7, 1, 1] }}
+          transition={{
+            duration: STARTER_COIN_SPIN_DURATION_SEC,
+            times: [0, 0.5, 0.78, 1],
+            ease: ["easeIn", "linear", "easeOut"],
+          }}
+          style={{ transformStyle: "preserve-3d" }}
+          className="relative h-52 w-52 md:h-64 md:w-64"
+        >
+          <div
+            className={`absolute inset-0 overflow-hidden rounded-full border-2 border-amber-100/80 shadow-[0_18px_40px_rgba(0,0,0,0.55)] ${imageFailed ? "bg-gradient-to-br from-amber-500 to-amber-700" : ""}`}
+            style={{
+              backfaceVisibility: "hidden",
+              WebkitBackfaceVisibility: "hidden",
+              ...(imageFailed
+                ? {}
+                : {
+                  backgroundImage: `url(${START_ORDER_COIN_FRONT_SRC})`,
+                  backgroundSize: "108%",
+                  backgroundPosition: "center",
+                }),
+            }}
+          >
+            {imageFailed && <div className="flex h-full items-center justify-center text-8xl font-black text-amber-100">先</div>}
+          </div>
+          <div
+            className={`absolute inset-0 overflow-hidden rounded-full border-2 border-amber-100/80 shadow-[0_18px_40px_rgba(0,0,0,0.55)] ${imageFailed ? "bg-gradient-to-br from-amber-500 to-amber-700" : ""}`}
+            style={{
+              transform: "rotateY(180deg)",
+              backfaceVisibility: "hidden",
+              WebkitBackfaceVisibility: "hidden",
+              ...(imageFailed
+                ? {}
+                : {
+                  backgroundImage: `url(${START_ORDER_COIN_BACK_SRC})`,
+                  backgroundSize: "108%",
+                  backgroundPosition: "center",
+                }),
+            }}
+          >
+            {imageFailed && <div className="flex h-full items-center justify-center text-8xl font-black text-amber-100">後</div>}
+          </div>
+        </motion.div>
+        <motion.p
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, delay: Math.max(0.1, STARTER_COIN_SPIN_DURATION_SEC - 0.4) }}
+          className="text-2xl font-black tracking-wide text-amber-100 md:text-3xl"
+        >
+          {roleLabel}
+        </motion.p>
+      </div>
+    </motion.div>
+  );
+}
+
 export function BlackWhiteOnline() {
   const [userId, setUserId] = useState<string | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -154,6 +256,8 @@ export function BlackWhiteOnline() {
   const [notice, setNotice] = useState("");
   const [flyingTile, setFlyingTile] = useState<number | null>(null);
   const [showVerdict, setShowVerdict] = useState(false);
+  const [showStarterCoin, setShowStarterCoin] = useState(false);
+  const [starterRole, setStarterRole] = useState<"lead" | "follow" | null>(null);
   const [record, setRecord] = useState<PlayerRecord>({ total: 0, wins: 0, losses: 0, winRate: 0 });
   const [revealedRows, setRevealedRows] = useState<RoomRevealRow[]>([]);
   const [, setRevealsLoadedForRoomId] = useState<string | null>(null);
@@ -387,12 +491,18 @@ export function BlackWhiteOnline() {
   useEffect(() => {
     if (!room) {
       previousRoomStatusRef.current = null;
+      setShowStarterCoin(false);
+      setStarterRole(null);
       return;
     }
 
     const prevStatus = previousRoomStatusRef.current;
     if (prevStatus === "waiting" && room.status === "playing") {
       playSfx("gameStart");
+      if (userId && room.lead_player_id) {
+        setStarterRole(room.lead_player_id === userId ? "lead" : "follow");
+        setShowStarterCoin(true);
+      }
     }
     if (prevStatus === "playing" && room.status === "finished") {
       if (!room.winner_id) {
@@ -405,6 +515,14 @@ export function BlackWhiteOnline() {
     }
     previousRoomStatusRef.current = room.status;
   }, [room, userId, playSfx]);
+
+  useEffect(() => {
+    if (!showStarterCoin) return;
+    const t = setTimeout(() => {
+      setShowStarterCoin(false);
+    }, Math.round(STARTER_COIN_SPIN_DURATION_SEC * 1000) + STARTER_COIN_RESULT_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [showStarterCoin]);
 
   useEffect(() => {
     if (notice && notice !== previousNoticeRef.current) {
@@ -1808,6 +1926,7 @@ export function BlackWhiteOnline() {
       </div>
 
       <AnimatePresence>{flyingTile !== null && <FlyingTile tile={flyingTile} />}</AnimatePresence>
+      <AnimatePresence>{showStarterCoin && starterRole && <StarterCoinOverlay role={starterRole} />}</AnimatePresence>
       <AnimatePresence>{showVerdict && myResultText && <AnimatedVerdict text={myResultText} />}</AnimatePresence>
     </main>
   );
