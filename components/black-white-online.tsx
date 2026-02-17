@@ -156,7 +156,7 @@ export function BlackWhiteOnline() {
   const [showVerdict, setShowVerdict] = useState(false);
   const [record, setRecord] = useState<PlayerRecord>({ total: 0, wins: 0, losses: 0, winRate: 0 });
   const [revealedRows, setRevealedRows] = useState<RoomRevealRow[]>([]);
-  const [revealsLoadedForRoomId, setRevealsLoadedForRoomId] = useState<string | null>(null);
+  const [, setRevealsLoadedForRoomId] = useState<string | null>(null);
   const [lastRoomSnapshot, setLastRoomSnapshot] = useState<BwRoom | null>(null);
   const [realtimeSubscribed, setRealtimeSubscribed] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(true);
@@ -449,14 +449,15 @@ export function BlackWhiteOnline() {
       return { roundNo, hostTile, guestTile, roundResult };
     });
   }, [room, rounds, revealedRows]);
-  const finalRoundSubmissionCount = useMemo(() => {
-    if (!room || room.status !== "finished") return null;
-    if (revealsLoadedForRoomId !== room.id) return null;
-    return revealedRows.filter((r) => r.round_number === room.current_round).length;
-  }, [room, revealedRows, revealsLoadedForRoomId]);
+  const currentRoundResult = useMemo(() => {
+    if (!room || room.current_round <= 0) return null;
+    return rounds.find((r) => r.round_number === room.current_round)?.result ?? null;
+  }, [room, rounds]);
   const finishedByForfeit = useMemo(() => {
-    return finalRoundSubmissionCount !== null && finalRoundSubmissionCount < 2;
-  }, [finalRoundSubmissionCount]);
+    if (!room || room.status !== "finished") return false;
+    if (!room.winner_id) return false;
+    return currentRoundResult === null;
+  }, [room, currentRoundResult]);
 
   const myScore = useMemo(() => {
     if (!room || !myRole) return 0;
@@ -922,16 +923,13 @@ export function BlackWhiteOnline() {
       room.status === "finished" &&
       Boolean(room.winner_id);
 
-    if (justFinishedWithWinner && userId && room.winner_id === userId) {
-      if (finalRoundSubmissionCount === null) return;
-      if (finishedByForfeit) {
-        setNotice("상대 플레이어가 기권했습니다. 종료 화면에서 라운드 숫자를 확인할 수 있습니다.");
-        setLeaveConfirmOpen(false);
-      }
+    if (justFinishedWithWinner && userId && room.winner_id === userId && finishedByForfeit) {
+      setNotice("상대 플레이어가 기권했습니다. 종료 화면에서 라운드 숫자를 확인할 수 있습니다.");
+      setLeaveConfirmOpen(false);
     }
 
     setLastRoomSnapshot(room);
-  }, [room, userId, lastRoomSnapshot, finalRoundSubmissionCount, finishedByForfeit]);
+  }, [room, userId, lastRoomSnapshot, finishedByForfeit]);
 
   useEffect(() => {
     if (!userId || !room) return;
@@ -1237,6 +1235,15 @@ export function BlackWhiteOnline() {
       p_room_id: room.id,
     });
     if (leaveError) {
+      const normalizedError = leaveError.message.trim().toUpperCase();
+      if (normalizedError.includes("ROOM_NOT_FOUND")) {
+        setLeaveConfirmOpen(false);
+        clearRoomScopedState();
+        playSfx("leave");
+        setNotice(isPlaying ? "게임에서 나가 기권 처리되었습니다." : "Room에서 나갔습니다.");
+        setLoading(false);
+        return;
+      }
       if (leaveError.message.toLowerCase().includes("does not exist")) {
         setError("서버에 bw_leave_room 함수가 없습니다. 최신 스키마를 적용해 주세요.");
       } else {

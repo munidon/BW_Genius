@@ -16,6 +16,8 @@ create table if not exists public.bw_rooms (
   room_code text not null unique check (char_length(room_code) = 6),
   host_id uuid not null references auth.users(id) on delete cascade,
   guest_id uuid references auth.users(id) on delete set null,
+  host_left_at timestamptz,
+  guest_left_at timestamptz,
   guest_ready boolean not null default false,
   status text not null default 'waiting' check (status in ('waiting', 'playing', 'finished')),
   current_round int not null default 0 check (current_round between 0 and 9),
@@ -63,6 +65,10 @@ alter table public.bw_rounds_public
 alter table public.bw_profiles
   add column if not exists wins int not null default 0,
   add column if not exists losses int not null default 0;
+
+alter table public.bw_rooms
+  add column if not exists host_left_at timestamptz,
+  add column if not exists guest_left_at timestamptz;
 
 create index if not exists idx_bw_rooms_code on public.bw_rooms(room_code);
 create index if not exists idx_bw_rounds_public_room on public.bw_rounds_public(room_id, round_number);
@@ -125,17 +131,19 @@ as $$
 $$;
 
 -- profiles policy
+drop policy if exists "bw_profiles_select_own_or_member" on public.bw_profiles;
 create policy "bw_profiles_select_own_or_member"
 on public.bw_profiles
 for select
 using (
-  id = auth.uid() or exists (
+  public.bw_profiles.id = auth.uid() or exists (
     select 1 from public.bw_rooms r
     where auth.uid() in (r.host_id, r.guest_id)
-      and id in (r.host_id, r.guest_id)
+      and public.bw_profiles.id in (r.host_id, r.guest_id)
   )
 );
 
+drop policy if exists "bw_profiles_upsert_own" on public.bw_profiles;
 create policy "bw_profiles_upsert_own"
 on public.bw_profiles
 for all
@@ -143,16 +151,19 @@ using (id = auth.uid())
 with check (id = auth.uid());
 
 -- rooms policy
+drop policy if exists "bw_rooms_select_member" on public.bw_rooms;
 create policy "bw_rooms_select_member"
 on public.bw_rooms
 for select
 using (auth.uid() in (host_id, guest_id));
 
+drop policy if exists "bw_rooms_insert_host" on public.bw_rooms;
 create policy "bw_rooms_insert_host"
 on public.bw_rooms
 for insert
 with check (host_id = auth.uid());
 
+drop policy if exists "bw_rooms_update_member" on public.bw_rooms;
 create policy "bw_rooms_update_member"
 on public.bw_rooms
 for update
@@ -160,11 +171,13 @@ using (auth.uid() in (host_id, guest_id))
 with check (auth.uid() in (host_id, guest_id));
 
 -- public rounds policy
+drop policy if exists "bw_rounds_public_select_member" on public.bw_rounds_public;
 create policy "bw_rounds_public_select_member"
 on public.bw_rounds_public
 for select
 using (public.bw_is_room_member(room_id));
 
+drop policy if exists "bw_rounds_public_no_client_write" on public.bw_rounds_public;
 create policy "bw_rounds_public_no_client_write"
 on public.bw_rounds_public
 for all
@@ -172,6 +185,7 @@ using (false)
 with check (false);
 
 -- submissions policy: 본인 제출만 조회 가능
+drop policy if exists "bw_submissions_select_own" on public.bw_submissions;
 create policy "bw_submissions_select_own"
 on public.bw_submissions
 for select
@@ -180,6 +194,7 @@ using (
   and public.bw_is_room_member(room_id)
 );
 
+drop policy if exists "bw_submissions_insert_own" on public.bw_submissions;
 create policy "bw_submissions_insert_own"
 on public.bw_submissions
 for insert
@@ -188,6 +203,7 @@ with check (
   and public.bw_is_room_member(room_id)
 );
 
+drop policy if exists "bw_submissions_block_update_delete" on public.bw_submissions;
 create policy "bw_submissions_block_update_delete"
 on public.bw_submissions
 for all
@@ -336,8 +352,8 @@ begin
   values (auth.uid(), trim(p_nickname))
   on conflict (id) do update set nickname = excluded.nickname;
 
-  insert into public.bw_rooms(room_code, host_id)
-  values (upper(trim(p_room_code)), auth.uid())
+  insert into public.bw_rooms(room_code, host_id, host_left_at, guest_left_at)
+  values (upper(trim(p_room_code)), auth.uid(), null, null)
   returning * into v_room;
 
   return v_room;
@@ -387,7 +403,8 @@ begin
 
   update public.bw_rooms
   set guest_id = auth.uid(),
-      guest_ready = false
+      guest_ready = false,
+      guest_left_at = null
   where id = v_room.id
   returning * into v_room;
 
@@ -600,7 +617,7 @@ begin
   returning * into v_room;
 
   insert into public.bw_rounds_public(room_id, round_number, lead_player_id, follow_player_id, lead_tile_color, follow_tile_color)
-  values (p_room_id, v_room.current_round, v_next_lead, v_next_follow)
+  values (p_room_id, v_room.current_round, v_next_lead, v_next_follow, null, null)
   on conflict (room_id, round_number) do nothing;
 
   return v_room;
@@ -642,6 +659,8 @@ begin
   update public.bw_rooms
   set status = 'waiting',
       guest_ready = false,
+      host_left_at = null,
+      guest_left_at = null,
       current_round = 0,
       round_phase = 'idle',
       lead_player_id = null,
@@ -666,6 +685,7 @@ set search_path = public
 as $$
 declare
   v_room public.bw_rooms;
+  v_after public.bw_rooms;
 begin
   if auth.uid() is null then
     raise exception 'AUTH_REQUIRED';
@@ -691,48 +711,74 @@ begin
       return null;
     end if;
 
-    if v_room.status = 'playing' then
+    if v_room.status = 'waiting' then
       update public.bw_rooms
-      set guest_ready = false,
+      set host_id = v_room.guest_id,
+          guest_id = null,
+          host_left_at = v_room.guest_left_at,
+          guest_left_at = null,
+          guest_ready = false
+      where id = p_room_id
+      returning * into v_after;
+    elsif v_room.status = 'playing' then
+      update public.bw_rooms
+      set host_left_at = coalesce(v_room.host_left_at, now()),
+          guest_ready = false,
           status = 'finished',
           round_phase = 'finished',
           lead_player_id = null,
           guest_score = least(greatest(v_room.guest_score, v_room.host_score + 1), 9),
           winner_id = v_room.guest_id
       where id = p_room_id
-      returning * into v_room;
-      return v_room;
+      returning * into v_after;
+    else
+      update public.bw_rooms
+      set host_left_at = coalesce(v_room.host_left_at, now()),
+          guest_ready = false,
+          lead_player_id = null
+      where id = p_room_id
+      returning * into v_after;
     end if;
-
-    update public.bw_rooms
-    set host_id = v_room.guest_id,
-        guest_id = null,
-        guest_ready = false
-    where id = p_room_id
-    returning * into v_room;
-    return v_room;
+  else
+    if v_room.status = 'waiting' then
+      update public.bw_rooms
+      set guest_id = null,
+          guest_left_at = null,
+          guest_ready = false
+      where id = p_room_id
+      returning * into v_after;
+    elsif v_room.status = 'playing' then
+      update public.bw_rooms
+      set guest_left_at = coalesce(v_room.guest_left_at, now()),
+          guest_ready = false,
+          status = 'finished',
+          round_phase = 'finished',
+          lead_player_id = null,
+          host_score = least(greatest(v_room.host_score, v_room.guest_score + 1), 9),
+          winner_id = v_room.host_id
+      where id = p_room_id
+      returning * into v_after;
+    else
+      update public.bw_rooms
+      set guest_left_at = coalesce(v_room.guest_left_at, now()),
+          guest_ready = false,
+          lead_player_id = null
+      where id = p_room_id
+      returning * into v_after;
+    end if;
   end if;
 
-  if v_room.status = 'playing' then
-    update public.bw_rooms
-    set guest_ready = false,
-        status = 'finished',
-        round_phase = 'finished',
-        lead_player_id = null,
-        host_score = least(greatest(v_room.host_score, v_room.guest_score + 1), 9),
-        winner_id = v_room.host_id
-    where id = p_room_id
-    returning * into v_room;
-    return v_room;
+  if v_after.guest_id is null then
+    if v_after.host_left_at is not null then
+      delete from public.bw_rooms where id = p_room_id;
+      return null;
+    end if;
+  elsif v_after.host_left_at is not null and v_after.guest_left_at is not null then
+    delete from public.bw_rooms where id = p_room_id;
+    return null;
   end if;
 
-  update public.bw_rooms
-  set guest_id = null,
-      guest_ready = false
-  where id = p_room_id
-  returning * into v_room;
-
-  return v_room;
+  return v_after;
 end;
 $$;
 
@@ -756,8 +802,14 @@ begin
 
   with deleted as (
     delete from public.bw_rooms r
-    where r.status = 'finished'
+    where (
+      r.status = 'finished'
       and r.updated_at < now() - p_max_age
+    ) or (
+      r.host_left_at is not null
+      and (r.guest_id is null or r.guest_left_at is not null)
+      and r.updated_at < now() - interval '10 minutes'
+    )
     returning 1
   )
   select count(*) into v_deleted from deleted;
