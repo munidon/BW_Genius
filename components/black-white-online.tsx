@@ -1260,11 +1260,8 @@ export function BlackWhiteOnline() {
     setLoading(false);
   };
 
-  const leaveFinishedGameToLobby = () => {
-    setError("");
-    playSfx("leave");
-    setNotice("게임 화면에서 나왔습니다.");
-    clearRoomScopedState();
+  const leaveFinishedGameToLobby = async () => {
+    await leaveRoom();
   };
 
   if (!supabase) {
