@@ -2,6 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { ALL_TILES, tileColor } from "@/lib/game";
 import { supabase } from "@/lib/supabase";
 
@@ -50,6 +51,7 @@ interface BwRoom {
   host_score: number;
   guest_score: number;
   winner_id: string | null;
+  updated_at: string;
 }
 
 interface BwRoundPublic {
@@ -167,9 +169,22 @@ export function BlackWhiteOnline() {
   const previousRoomStatusRef = useRef<RoomStatus | null>(null);
   const previousNoticeRef = useRef("");
   const previousErrorRef = useRef("");
+  const authSyncSeqRef = useRef(0);
+  const latestRoomFetchSeqRef = useRef(0);
+  const userIdRef = useRef<string | null>(null);
+  const roomRef = useRef<BwRoom | null>(null);
+  const cleanupTriggeredUsersRef = useRef<Set<string>>(new Set());
 
   const inRoom = Boolean(room);
   const desiredBgmTrack: BgmTrack | null = room ? (room.status === "playing" ? "playing" : "waiting") : null;
+
+  useEffect(() => {
+    userIdRef.current = userId;
+  }, [userId]);
+
+  useEffect(() => {
+    roomRef.current = room;
+  }, [room]);
 
   const getAudioByTrack = useCallback((track: BgmTrack | null) => {
     if (track === "waiting") return waitingBgmRef.current;
@@ -463,13 +478,80 @@ export function BlackWhiteOnline() {
     return !(profiles[userId] ?? "").trim();
   }, [userId, profiles]);
 
-  const loadMyRecord = async (uid: string) => {
+  const clearRoomScopedState = useCallback(() => {
+    roomRef.current = null;
+    setRoom(null);
+    setRounds([]);
+    setMySubmissions([]);
+    setRevealedRows([]);
+    setRevealsLoadedForRoomId(null);
+    setLastRoomSnapshot(null);
+  }, []);
+
+  const clearAuthScopedState = useCallback(() => {
+    latestRoomFetchSeqRef.current += 1;
+    setUserId(null);
+    userIdRef.current = null;
+    setNickname("");
+    setProfiles({});
+    setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
+    setProfileRecords({});
+    clearRoomScopedState();
+    setAuthModalOpen(false);
+    setLeaveConfirmOpen(false);
+  }, [clearRoomScopedState]);
+
+  const clearSupabasePersistedSession = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const purge = (storage: Storage) => {
+      for (let i = storage.length - 1; i >= 0; i -= 1) {
+        const key = storage.key(i);
+        if (!key) continue;
+        if (key === "supabase.auth.token" || key.includes("auth-token")) {
+          storage.removeItem(key);
+        }
+      }
+    };
+    purge(window.localStorage);
+    purge(window.sessionStorage);
+  }, []);
+
+  const stripAuthCallbackParams = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    let changed = false;
+
+    const authParams = ["code", "state", "error", "error_code", "error_description"];
+    authParams.forEach((key) => {
+      if (url.searchParams.has(key)) {
+        url.searchParams.delete(key);
+        changed = true;
+      }
+    });
+
+    if (
+      url.hash.includes("access_token") ||
+      url.hash.includes("refresh_token") ||
+      url.hash.includes("expires_at") ||
+      url.hash.includes("token_type")
+    ) {
+      url.hash = "";
+      changed = true;
+    }
+
+    if (changed) {
+      window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
+
+  const loadMyRecord = async (uid: string, authSyncSeq?: number) => {
     if (!supabase) return;
     const { data, error: profileError } = await supabase
       .from("bw_profiles")
       .select("wins,losses")
       .eq("id", uid)
       .maybeSingle();
+    if (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current) return;
 
     if (profileError || !data) {
       setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
@@ -561,6 +643,16 @@ export function BlackWhiteOnline() {
   };
 
   const handleRoomSync = async (nextRoom: BwRoom) => {
+    const currentRoom = roomRef.current;
+    if (currentRoom && currentRoom.id === nextRoom.id) {
+      const currentUpdatedAt = Date.parse(currentRoom.updated_at);
+      const nextUpdatedAt = Date.parse(nextRoom.updated_at);
+      if (Number.isFinite(currentUpdatedAt) && Number.isFinite(nextUpdatedAt) && nextUpdatedAt < currentUpdatedAt) {
+        return;
+      }
+    }
+
+    roomRef.current = nextRoom;
     setRoom(nextRoom);
     await loadProfiles([nextRoom.host_id, nextRoom.guest_id ?? ""]);
     if (nextRoom.status !== "finished") {
@@ -574,40 +666,36 @@ export function BlackWhiteOnline() {
     ]);
   };
 
-  const loadLatestRoom = async (uid: string) => {
+  const loadLatestRoom = async (uid: string, authSyncSeq?: number) => {
     if (!supabase) return;
-
-    // Opportunistic cleanup for stale finished rooms left by abrupt tab/session exits.
-    const { error: cleanupError } = await supabase.rpc("bw_cleanup_stale_finished_rooms");
-    if (cleanupError && cleanupError.code !== "42883") {
-      console.warn("stale room cleanup failed", cleanupError.message);
-    }
+    const fetchSeq = ++latestRoomFetchSeqRef.current;
+    const isObsolete = () =>
+      fetchSeq !== latestRoomFetchSeqRef.current ||
+      uid !== userIdRef.current ||
+      (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current);
 
     const { data } = await supabase
       .from("bw_rooms")
-      .select("id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id")
+      .select("id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id,updated_at")
       .or(`host_id.eq.${uid},guest_id.eq.${uid}`)
       .in("status", ["playing", "waiting"])
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (isObsolete()) return;
 
     if (data) {
       await handleRoomSync(data as BwRoom);
       return;
     }
 
-    setRoom(null);
-    setRounds([]);
-    setMySubmissions([]);
-    setRevealedRows([]);
-    setRevealsLoadedForRoomId(null);
-    setLastRoomSnapshot(null);
+    clearRoomScopedState();
   };
 
-  const syncMyNickname = async (uid: string, fallback?: string) => {
+  const syncMyNickname = async (uid: string, fallback?: string, authSyncSeq?: number) => {
     if (!supabase) return;
     const { data } = await supabase.from("bw_profiles").select("nickname").eq("id", uid).maybeSingle();
+    if (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current) return;
     if (data?.nickname) {
       setProfiles((prev) => ({ ...prev, [uid]: data.nickname }));
       setNickname(data.nickname);
@@ -624,42 +712,50 @@ export function BlackWhiteOnline() {
       setError("Supabase 환경변수가 없습니다. .env.local을 설정해 주세요.");
       return;
     }
+    const client = supabase;
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      const user = data.session?.user;
+    const handleAuthSession = async (session: Session | null, authSyncSeq: number) => {
+      if (authSyncSeq !== authSyncSeqRef.current) return;
+      const user = session?.user;
       const uid = user?.id ?? null;
-      setUserId(uid);
       if (uid) {
-        await syncMyNickname(uid, (user?.user_metadata?.nickname as string | undefined) ?? "");
-        await loadMyRecord(uid);
-        await loadLatestRoom(uid);
+        setUserId(uid);
+        userIdRef.current = uid;
+        if (!cleanupTriggeredUsersRef.current.has(uid)) {
+          cleanupTriggeredUsersRef.current.add(uid);
+          void client.rpc("bw_cleanup_stale_finished_rooms").then(({ error: cleanupError }) => {
+            if (cleanupError && cleanupError.code !== "42883") {
+              console.warn("stale room cleanup failed", cleanupError.message);
+            }
+          });
+        }
+        await syncMyNickname(uid, (user?.user_metadata?.nickname as string | undefined) ?? "", authSyncSeq);
+        await loadMyRecord(uid, authSyncSeq);
+        await loadLatestRoom(uid, authSyncSeq);
+        stripAuthCallbackParams();
+        return;
       }
+      clearSupabasePersistedSession();
+      clearAuthScopedState();
+      stripAuthCallbackParams();
+    };
+
+    const initialAuthSyncSeq = authSyncSeqRef.current;
+    client.auth.getSession().then(async ({ data }) => {
+      await handleAuthSession(data.session, initialAuthSyncSeq);
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      const user = session?.user;
-      const uid = user?.id ?? null;
-      setUserId(uid);
-      if (!uid) {
-        setRoom(null);
-        setRounds([]);
-        setMySubmissions([]);
-        setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
-        setProfileRecords({});
-        setRevealedRows([]);
-        return;
-      }
-      await syncMyNickname(uid, (user?.user_metadata?.nickname as string | undefined) ?? "");
-      await loadMyRecord(uid);
-      await loadLatestRoom(uid);
+    } = client.auth.onAuthStateChange(async (_event, session) => {
+      const authSyncSeq = ++authSyncSeqRef.current;
+      await handleAuthSession(session, authSyncSeq);
     });
 
     return () => {
       subscription.unsubscribe();
     };
-  }, []);
+  }, [clearAuthScopedState, clearSupabasePersistedSession, stripAuthCallbackParams]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -676,17 +772,16 @@ export function BlackWhiteOnline() {
     if (!supabase || !room) return;
     const client = supabase;
     setRealtimeSubscribed(false);
+    const uid = userId;
+    if (!uid) return;
 
     const channel = client
       .channel(`bw-room-${room.id}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "bw_rooms", filter: `id=eq.${room.id}` },
-        async (payload) => {
-          const next = payload.new as BwRoom;
-          if (next?.id) {
-            await handleRoomSync(next);
-          }
+        async () => {
+          await loadLatestRoom(uid);
         }
       )
       .on(
@@ -705,6 +800,9 @@ export function BlackWhiteOnline() {
       )
       .subscribe((status) => {
         setRealtimeSubscribed(status === "SUBSCRIBED");
+        if (status === "SUBSCRIBED") {
+          void loadLatestRoom(uid);
+        }
       });
 
     return () => {
@@ -740,18 +838,20 @@ export function BlackWhiteOnline() {
 
   useEffect(() => {
     if (!userId || !room) return;
-    if (realtimeSubscribed && isPageVisible) return;
+    const waitingForGuestJoin = room.status === "waiting" && !room.guest_id;
+    if (!waitingForGuestJoin && realtimeSubscribed && isPageVisible) return;
 
     loadLatestRoom(userId);
     loadMyRecord(userId);
 
+    const refreshIntervalMs = waitingForGuestJoin ? 1000 : 5000;
     const t = setInterval(() => {
       loadLatestRoom(userId);
       loadMyRecord(userId);
-    }, 20000);
+    }, refreshIntervalMs);
 
     return () => clearInterval(t);
-  }, [userId, room?.id, realtimeSubscribed, isPageVisible]);
+  }, [userId, room?.id, room?.status, room?.guest_id, realtimeSubscribed, isPageVisible]);
 
   useEffect(() => {
     if (!room || room.status !== "finished") {
@@ -841,16 +941,24 @@ export function BlackWhiteOnline() {
     setLoading(true);
     setError("");
     setNotice("");
-    const { error: logoutError } = await supabase.auth.signOut();
-    if (logoutError) {
-      setError(`로그아웃 실패: ${logoutError.message}`);
-      setLoading(false);
-      return;
+    const authSyncSeq = ++authSyncSeqRef.current;
+    latestRoomFetchSeqRef.current += 1;
+    clearAuthScopedState();
+    clearSupabasePersistedSession();
+
+    const { error: globalSignOutError } = await supabase.auth.signOut({ scope: "global" });
+    if (globalSignOutError) {
+      const { error: localSignOutError } = await supabase.auth.signOut({ scope: "local" });
+      if (localSignOutError) {
+        setError(`로그아웃 실패: ${globalSignOutError.message}`);
+      }
     }
-    setUserId(null);
-    setRoom(null);
-    setRounds([]);
-    setMySubmissions([]);
+
+    if (authSyncSeq === authSyncSeqRef.current) {
+      clearAuthScopedState();
+      clearSupabasePersistedSession();
+    }
+    stripAuthCallbackParams();
     setLoading(false);
   };
 
@@ -1009,9 +1117,7 @@ export function BlackWhiteOnline() {
     }
 
     setLeaveConfirmOpen(false);
-    setRoom(null);
-    setRounds([]);
-    setMySubmissions([]);
+    clearRoomScopedState();
     playSfx("leave");
     setNotice(isPlaying ? "게임에서 나가 기권 처리되었습니다." : "Room에서 나갔습니다.");
     setLoading(false);
@@ -1021,9 +1127,7 @@ export function BlackWhiteOnline() {
     setError("");
     playSfx("leave");
     setNotice("게임 화면에서 나왔습니다.");
-    setRoom(null);
-    setRounds([]);
-    setMySubmissions([]);
+    clearRoomScopedState();
   };
 
   if (!supabase) {
