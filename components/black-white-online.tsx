@@ -170,9 +170,11 @@ export function BlackWhiteOnline() {
   const previousNoticeRef = useRef("");
   const previousErrorRef = useRef("");
   const authSyncSeqRef = useRef(0);
-  const latestRoomFetchSeqRef = useRef(0);
+  const latestRoundsFetchSeqRef = useRef(0);
+  const latestSubmissionsFetchSeqRef = useRef(0);
   const userIdRef = useRef<string | null>(null);
   const roomRef = useRef<BwRoom | null>(null);
+  const emptyRoomReadCountRef = useRef(0);
   const cleanupTriggeredUsersRef = useRef<Set<string>>(new Set());
 
   const inRoom = Boolean(room);
@@ -479,7 +481,10 @@ export function BlackWhiteOnline() {
   }, [userId, profiles]);
 
   const clearRoomScopedState = useCallback(() => {
+    latestRoundsFetchSeqRef.current += 1;
+    latestSubmissionsFetchSeqRef.current += 1;
     roomRef.current = null;
+    emptyRoomReadCountRef.current = 0;
     setRoom(null);
     setRounds([]);
     setMySubmissions([]);
@@ -489,9 +494,9 @@ export function BlackWhiteOnline() {
   }, []);
 
   const clearAuthScopedState = useCallback(() => {
-    latestRoomFetchSeqRef.current += 1;
     setUserId(null);
     userIdRef.current = null;
+    emptyRoomReadCountRef.current = 0;
     setNickname("");
     setProfiles({});
     setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
@@ -603,12 +608,17 @@ export function BlackWhiteOnline() {
 
   const loadRounds = async (roomId: string) => {
     if (!supabase) return;
+    const fetchSeq = ++latestRoundsFetchSeqRef.current;
+    const isObsolete = () =>
+      fetchSeq !== latestRoundsFetchSeqRef.current || roomRef.current?.id !== roomId;
+
     const query = supabase
       .from("bw_rounds_public")
       .select("id,room_id,round_number,lead_player_id,follow_player_id,lead_submitted,follow_submitted,lead_tile_color,follow_tile_color,result,winner_id")
       .eq("room_id", roomId);
 
     const { data, error: roundError } = await query.order("round_number", { ascending: true });
+    if (isObsolete()) return;
 
     if (roundError && roundError.message.toLowerCase().includes("lead_tile_color")) {
       const { data: fallbackData } = await supabase
@@ -616,6 +626,7 @@ export function BlackWhiteOnline() {
         .select("id,room_id,round_number,lead_player_id,follow_player_id,lead_submitted,follow_submitted,result,winner_id")
         .eq("room_id", roomId)
         .order("round_number", { ascending: true });
+      if (isObsolete()) return;
 
       if (fallbackData) {
         const normalized = (fallbackData as BwRoundPublic[]).map((row) => ({
@@ -632,13 +643,20 @@ export function BlackWhiteOnline() {
   };
 
   const loadMySubmissions = async (roomId: string) => {
-    if (!supabase || !userId) return;
+    const currentUserId = userIdRef.current;
+    if (!supabase || !currentUserId) return;
+    const fetchSeq = ++latestSubmissionsFetchSeqRef.current;
+
     const { data } = await supabase
       .from("bw_submissions")
       .select("id,room_id,round_number,player_id,tile")
       .eq("room_id", roomId)
-      .eq("player_id", userId)
+      .eq("player_id", currentUserId)
       .order("round_number", { ascending: true });
+    if (fetchSeq !== latestSubmissionsFetchSeqRef.current) return;
+    if (roomRef.current?.id !== roomId) return;
+    if (userIdRef.current !== currentUserId) return;
+
     if (data) setMySubmissions(data as BwSubmission[]);
   };
 
@@ -652,6 +670,7 @@ export function BlackWhiteOnline() {
       }
     }
 
+    emptyRoomReadCountRef.current = 0;
     roomRef.current = nextRoom;
     setRoom(nextRoom);
     await loadProfiles([nextRoom.host_id, nextRoom.guest_id ?? ""]);
@@ -668,15 +687,28 @@ export function BlackWhiteOnline() {
 
   const loadLatestRoom = async (uid: string, authSyncSeq?: number) => {
     if (!supabase) return;
-    const fetchSeq = ++latestRoomFetchSeqRef.current;
     const isObsolete = () =>
-      fetchSeq !== latestRoomFetchSeqRef.current ||
-      uid !== userIdRef.current ||
-      (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current);
+      uid !== userIdRef.current || (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current);
+    const roomSelect =
+      "id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id,updated_at";
+    const currentRoomId = roomRef.current?.id ?? null;
+
+    if (currentRoomId) {
+      const { data: currentRoomData } = await supabase
+        .from("bw_rooms")
+        .select(roomSelect)
+        .eq("id", currentRoomId)
+        .maybeSingle();
+      if (isObsolete()) return;
+      if (currentRoomData) {
+        await handleRoomSync(currentRoomData as BwRoom);
+        return;
+      }
+    }
 
     const { data } = await supabase
       .from("bw_rooms")
-      .select("id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id,updated_at")
+      .select(roomSelect)
       .or(`host_id.eq.${uid},guest_id.eq.${uid}`)
       .in("status", ["playing", "waiting"])
       .order("updated_at", { ascending: false })
@@ -687,6 +719,13 @@ export function BlackWhiteOnline() {
     if (data) {
       await handleRoomSync(data as BwRoom);
       return;
+    }
+
+    if (roomRef.current) {
+      emptyRoomReadCountRef.current += 1;
+      if (emptyRoomReadCountRef.current < 2) {
+        return;
+      }
     }
 
     clearRoomScopedState();
@@ -724,7 +763,7 @@ export function BlackWhiteOnline() {
         if (!cleanupTriggeredUsersRef.current.has(uid)) {
           cleanupTriggeredUsersRef.current.add(uid);
           void client.rpc("bw_cleanup_stale_finished_rooms").then(({ error: cleanupError }) => {
-            if (cleanupError && cleanupError.code !== "42883") {
+            if (cleanupError && cleanupError.code !== "42883" && cleanupError.code !== "PGRST202") {
               console.warn("stale room cleanup failed", cleanupError.message);
             }
           });
@@ -788,14 +827,14 @@ export function BlackWhiteOnline() {
         "postgres_changes",
         { event: "*", schema: "public", table: "bw_rounds_public", filter: `room_id=eq.${room.id}` },
         async () => {
-          await loadRounds(room.id);
+          await Promise.all([loadRounds(room.id), loadLatestRoom(uid)]);
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "bw_submissions", filter: `room_id=eq.${room.id}` },
         async () => {
-          await loadMySubmissions(room.id);
+          await Promise.all([loadMySubmissions(room.id), loadRounds(room.id), loadLatestRoom(uid)]);
         }
       )
       .subscribe((status) => {
@@ -810,6 +849,19 @@ export function BlackWhiteOnline() {
       client.removeChannel(channel);
     };
   }, [room?.id, userId]);
+
+  useEffect(() => {
+    if (!room || room.status !== "playing") return;
+    const uid = userIdRef.current;
+
+    void Promise.all([loadRounds(room.id), uid ? loadLatestRoom(uid) : Promise.resolve()]);
+    const refreshIntervalMs = isPageVisible ? 800 : 2000;
+    const t = setInterval(() => {
+      void Promise.all([loadRounds(room.id), uid ? loadLatestRoom(uid) : Promise.resolve()]);
+    }, refreshIntervalMs);
+
+    return () => clearInterval(t);
+  }, [room?.id, room?.status, isPageVisible]);
 
   useEffect(() => {
     if (!room) return;
@@ -838,13 +890,13 @@ export function BlackWhiteOnline() {
 
   useEffect(() => {
     if (!userId || !room) return;
-    const waitingForGuestJoin = room.status === "waiting" && !room.guest_id;
-    if (!waitingForGuestJoin && realtimeSubscribed && isPageVisible) return;
+    const waitingRoom = room.status === "waiting";
+    if (!waitingRoom && realtimeSubscribed && isPageVisible) return;
 
     loadLatestRoom(userId);
     loadMyRecord(userId);
 
-    const refreshIntervalMs = waitingForGuestJoin ? 1000 : 5000;
+    const refreshIntervalMs = waitingRoom ? 1000 : 5000;
     const t = setInterval(() => {
       loadLatestRoom(userId);
       loadMyRecord(userId);
@@ -895,6 +947,15 @@ export function BlackWhiteOnline() {
     return raw;
   };
 
+  const formatRoomActionError = (raw: string) => {
+    if (raw.includes("GUEST_NOT_JOINED")) return "게스트가 아직 입장하지 않았습니다.";
+    if (raw.includes("GUEST_NOT_READY")) return "게스트 준비 전입니다. 게스트가 준비 버튼을 누른 후 다시 시작해 주세요.";
+    if (raw.includes("ONLY_HOST_CAN_START")) return "호스트만 게임을 시작할 수 있습니다.";
+    if (raw.includes("ROOM_ALREADY_STARTED")) return "이미 시작된 게임입니다.";
+    if (raw.includes("ROOM_NOT_FOUND")) return "방을 찾을 수 없습니다. 방 목록을 새로고침해 주세요.";
+    return raw;
+  };
+
   const signInWithGoogle = async () => {
     if (!supabase) return;
     setError("");
@@ -942,7 +1003,6 @@ export function BlackWhiteOnline() {
     setError("");
     setNotice("");
     const authSyncSeq = ++authSyncSeqRef.current;
-    latestRoomFetchSeqRef.current += 1;
     clearAuthScopedState();
     clearSupabasePersistedSession();
 
@@ -1037,11 +1097,35 @@ export function BlackWhiteOnline() {
 
   const startGame = async () => {
     if (!supabase || !room) return;
+    const uid = userIdRef.current;
+    if (!uid) return;
+
     setLoading(true);
     setError("");
+    setNotice("");
+
+    // Start 직전에 최신 room 상태를 강제로 동기화해 stale UI로 인한 무반응을 방지.
+    await loadLatestRoom(uid);
+    const latestRoom = roomRef.current;
+    if (!latestRoom || latestRoom.id !== room.id) {
+      setError("방 상태를 다시 확인해 주세요.");
+      setLoading(false);
+      return;
+    }
+    if (!latestRoom.guest_id) {
+      setError("게스트가 아직 입장하지 않았습니다.");
+      setLoading(false);
+      return;
+    }
+    if (!latestRoom.guest_ready) {
+      setError("게스트 준비 전입니다. 게스트가 준비 버튼을 누른 후 다시 시작해 주세요.");
+      setLoading(false);
+      return;
+    }
+
     const { data, error: startError } = await supabase.rpc("bw_start_game", { p_room_id: room.id });
     if (startError) {
-      setError(startError.message);
+      setError(formatRoomActionError(startError.message));
       setLoading(false);
       return;
     }

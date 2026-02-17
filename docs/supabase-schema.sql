@@ -69,6 +69,43 @@ create index if not exists idx_bw_rounds_public_room on public.bw_rounds_public(
 create index if not exists idx_bw_submissions_room_player on public.bw_submissions(room_id, player_id);
 create unique index if not exists idx_bw_profiles_nickname_unique on public.bw_profiles(lower(nickname));
 
+-- Realtime publication 등록 (중복 등록 방지)
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'bw_rooms'
+    ) then
+      execute 'alter publication supabase_realtime add table public.bw_rooms';
+    end if;
+
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'bw_rounds_public'
+    ) then
+      execute 'alter publication supabase_realtime add table public.bw_rounds_public';
+    end if;
+
+    if not exists (
+      select 1
+      from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'bw_submissions'
+    ) then
+      execute 'alter publication supabase_realtime add table public.bw_submissions';
+    end if;
+  end if;
+end
+$$;
+
 alter table public.bw_profiles enable row level security;
 alter table public.bw_rooms enable row level security;
 alter table public.bw_rounds_public enable row level security;
@@ -209,6 +246,10 @@ declare
   v_lead uuid;
   v_follow uuid;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   select * into v_room
   from public.bw_rooms
   where id = p_room_id
@@ -271,6 +312,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_start_game(uuid) from anon, public;
 grant execute on function public.bw_start_game(uuid) to authenticated;
 
 create or replace function public.bw_create_room(p_room_code text, p_nickname text)
@@ -282,6 +324,10 @@ as $$
 declare
   v_room public.bw_rooms;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   if char_length(trim(p_room_code)) <> 6 then
     raise exception 'INVALID_ROOM_CODE';
   end if;
@@ -298,6 +344,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_create_room(text, text) from anon, public;
 grant execute on function public.bw_create_room(text, text) to authenticated;
 
 create or replace function public.bw_join_room(p_room_code text, p_nickname text)
@@ -309,6 +356,10 @@ as $$
 declare
   v_room public.bw_rooms;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   insert into public.bw_profiles(id, nickname)
   values (auth.uid(), trim(p_nickname))
   on conflict (id) do update set nickname = excluded.nickname;
@@ -344,6 +395,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_join_room(text, text) from anon, public;
 grant execute on function public.bw_join_room(text, text) to authenticated;
 
 create or replace function public.bw_set_guest_ready(p_room_id uuid, p_ready boolean)
@@ -355,6 +407,10 @@ as $$
 declare
   v_room public.bw_rooms;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   select * into v_room
   from public.bw_rooms
   where id = p_room_id
@@ -381,6 +437,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_set_guest_ready(uuid, boolean) from anon, public;
 grant execute on function public.bw_set_guest_ready(uuid, boolean) to authenticated;
 
 create or replace function public.bw_submit_tile(p_room_id uuid, p_tile smallint)
@@ -562,6 +619,10 @@ as $$
 declare
   v_room public.bw_rooms;
 begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
   select * into v_room
   from public.bw_rooms
   where id = p_room_id
@@ -594,6 +655,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.bw_reset_room(uuid) from anon, public;
 grant execute on function public.bw_reset_room(uuid) to authenticated;
 
 create or replace function public.bw_leave_room(p_room_id uuid)
