@@ -1,5 +1,5 @@
-import { BlackWhiteOnline } from "@/components/black-white-online";
+import { BoardgameLanding } from "@/components/boardgame-landing";
 
 export default function Home() {
-  return <BlackWhiteOnline />;
+  return <BoardgameLanding />;
 }

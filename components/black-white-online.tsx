@@ -1,8 +1,10 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
+import Image from "next/image";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
+import { useAuth } from "@/components/auth-provider";
 import { ALL_TILES, tileColor } from "@/lib/game";
 import { supabase } from "@/lib/supabase";
 
@@ -249,11 +251,15 @@ function StarterCoinOverlay({ role }: { role: "lead" | "follow" }) {
   );
 }
 
-export function BlackWhiteOnline() {
-  const [userId, setUserId] = useState<string | null>(null);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
+export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
+  const {
+    userId,
+    nickname: authNickname,
+    requiresNickname,
+    isLoading: authLoading,
+    profileLoading,
+  } = useAuth();
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
-  const [nickname, setNickname] = useState("");
 
   const [room, setRoom] = useState<BwRoom | null>(null);
   const [roomCodeInput, setRoomCodeInput] = useState("");
@@ -625,12 +631,8 @@ export function BlackWhiteOnline() {
   }, [room, userId]);
   const myNickname = useMemo(() => {
     if (!userId) return "";
-    return profiles[userId] ?? nickname.trim() ?? "";
-  }, [userId, profiles, nickname]);
-  const requiresNickname = useMemo(() => {
-    if (!userId) return false;
-    return !(profiles[userId] ?? "").trim();
-  }, [userId, profiles]);
+    return profiles[userId] ?? authNickname.trim();
+  }, [userId, profiles, authNickname]);
 
   const clearRoomScopedState = useCallback(() => {
     latestRoundsFetchSeqRef.current += 1;
@@ -646,15 +648,12 @@ export function BlackWhiteOnline() {
   }, []);
 
   const clearAuthScopedState = useCallback(() => {
-    setUserId(null);
     userIdRef.current = null;
     emptyRoomReadCountRef.current = 0;
-    setNickname("");
     setProfiles({});
     setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
     setProfileRecords({});
     clearRoomScopedState();
-    setAuthModalOpen(false);
     setLeaveConfirmOpen(false);
   }, [clearRoomScopedState]);
 
@@ -903,70 +902,45 @@ export function BlackWhiteOnline() {
     clearRoomScopedState();
   };
 
-  const syncMyNickname = async (uid: string, fallback?: string, authSyncSeq?: number) => {
-    if (!supabase) return;
-    const { data } = await supabase.from("bw_profiles").select("nickname").eq("id", uid).maybeSingle();
-    if (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current) return;
-    if (data?.nickname) {
-      setProfiles((prev) => ({ ...prev, [uid]: data.nickname }));
-      setNickname(data.nickname);
-      return;
-    }
-    if (fallback?.trim()) {
-      setProfiles((prev) => ({ ...prev, [uid]: fallback.trim() }));
-      setNickname(fallback.trim());
-    }
-  };
-
   useEffect(() => {
     if (!supabase) {
       setError("Supabase 환경변수가 없습니다. .env.local을 설정해 주세요.");
       return;
     }
-    const client = supabase;
+    if (authLoading) return;
 
-    const handleAuthSession = async (session: Session | null, authSyncSeq: number) => {
-      if (authSyncSeq !== authSyncSeqRef.current) return;
-      const user = session?.user;
-      const uid = user?.id ?? null;
-      if (uid) {
-        setUserId(uid);
-        userIdRef.current = uid;
-        if (!cleanupTriggeredUsersRef.current.has(uid)) {
-          cleanupTriggeredUsersRef.current.add(uid);
-          void client.rpc("bw_cleanup_stale_finished_rooms").then(({ error: cleanupError }) => {
-            if (cleanupError && cleanupError.code !== "42883" && cleanupError.code !== "PGRST202") {
-              console.warn("stale room cleanup failed", cleanupError.message);
-            }
-          });
-        }
-        await syncMyNickname(uid, (user?.user_metadata?.nickname as string | undefined) ?? "", authSyncSeq);
-        await loadMyRecord(uid, authSyncSeq);
-        await loadLatestRoom(uid, authSyncSeq);
-        stripAuthCallbackParams();
-        return;
-      }
+    const authSyncSeq = ++authSyncSeqRef.current;
+    const uid = userId;
+
+    if (!uid) {
       clearSupabasePersistedSession();
       clearAuthScopedState();
       stripAuthCallbackParams();
-    };
+      return;
+    }
 
-    const initialAuthSyncSeq = authSyncSeqRef.current;
-    client.auth.getSession().then(async ({ data }) => {
-      await handleAuthSession(data.session, initialAuthSyncSeq);
-    });
+    userIdRef.current = uid;
+    if (!cleanupTriggeredUsersRef.current.has(uid)) {
+      cleanupTriggeredUsersRef.current.add(uid);
+      void supabase.rpc("bw_cleanup_stale_finished_rooms").then(({ error: cleanupError }) => {
+        if (cleanupError && cleanupError.code !== "42883" && cleanupError.code !== "PGRST202") {
+          console.warn("stale room cleanup failed", cleanupError.message);
+        }
+      });
+    }
 
-    const {
-      data: { subscription },
-    } = client.auth.onAuthStateChange(async (_event, session) => {
-      const authSyncSeq = ++authSyncSeqRef.current;
-      await handleAuthSession(session, authSyncSeq);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [clearAuthScopedState, clearSupabasePersistedSession, stripAuthCallbackParams]);
+    void (async () => {
+      await loadMyRecord(uid, authSyncSeq);
+      await loadLatestRoom(uid, authSyncSeq);
+      stripAuthCallbackParams();
+    })();
+  }, [
+    authLoading,
+    userId,
+    clearAuthScopedState,
+    clearSupabasePersistedSession,
+    stripAuthCallbackParams,
+  ]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -1098,17 +1072,6 @@ export function BlackWhiteOnline() {
     return () => clearTimeout(t);
   }, [notice]);
 
-  const formatAuthError = (raw: string) => {
-    const lower = raw.toLowerCase();
-    if (lower.includes("provider is not enabled")) {
-      return "Google 로그인이 비활성화되어 있습니다. Supabase Auth Provider 설정을 확인해 주세요.";
-    }
-    if (lower.includes("oauth")) {
-      return "Google 로그인 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.";
-    }
-    return raw;
-  };
-
   const formatNicknameError = (raw: string, code?: string) => {
     const lower = raw.toLowerCase();
     if (code === "23505" || lower.includes("duplicate key value") || lower.includes("bw_profiles_nickname")) {
@@ -1129,77 +1092,11 @@ export function BlackWhiteOnline() {
     return raw;
   };
 
-  const signInWithGoogle = async () => {
-    if (!supabase) return;
-    setError("");
-    setNotice("");
-    setLoading(true);
-
-    const redirectTo = typeof window !== "undefined" ? `${window.location.origin}/` : undefined;
-    const { error: oauthError } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo },
-    });
-
-    if (oauthError) {
-      setError(formatAuthError(oauthError.message));
-      setLoading(false);
-      return;
-    }
-  };
-
-  const saveNickname = async () => {
-    if (!supabase || !userId) return;
-    if (!nickname.trim()) {
-      setError("닉네임을 입력해 주세요.");
-      return;
-    }
-    setLoading(true);
-    setError("");
-    const { error: upsertError } = await supabase.from("bw_profiles").upsert({
-      id: userId,
-      nickname: nickname.trim(),
-    });
-    if (upsertError) {
-      setError(formatNicknameError(upsertError.message, upsertError.code));
-      setLoading(false);
-      return;
-    }
-    setProfiles((prev) => ({ ...prev, [userId]: nickname.trim() }));
-    setNotice("닉네임 설정이 완료되었습니다.");
-    setLoading(false);
-  };
-
-  const logout = async () => {
-    if (!supabase) return;
-    setLoading(true);
-    setError("");
-    setNotice("");
-    const authSyncSeq = ++authSyncSeqRef.current;
-    clearAuthScopedState();
-    clearSupabasePersistedSession();
-
-    const { error: globalSignOutError } = await supabase.auth.signOut({ scope: "global" });
-    if (globalSignOutError) {
-      const { error: localSignOutError } = await supabase.auth.signOut({ scope: "local" });
-      if (localSignOutError) {
-        setError(`로그아웃 실패: ${globalSignOutError.message}`);
-      }
-    }
-
-    if (authSyncSeq === authSyncSeqRef.current) {
-      clearAuthScopedState();
-      clearSupabasePersistedSession();
-    }
-    stripAuthCallbackParams();
-    setLoading(false);
-  };
-
   const createRoom = async () => {
     if (!supabase) return;
-    const displayNickname = (myNickname || nickname).trim();
+    const displayNickname = myNickname.trim();
     if (!displayNickname) {
-      setError("닉네임이 필요합니다. 우측 상단 로그인 또는 닉네임 설정을 먼저 완료해 주세요.");
+      setError("닉네임이 필요합니다. 랜딩 페이지에서 닉네임 설정을 먼저 완료해 주세요.");
       return;
     }
 
@@ -1224,7 +1121,7 @@ export function BlackWhiteOnline() {
 
   const joinRoom = async () => {
     if (!supabase) return;
-    const displayNickname = (myNickname || nickname).trim();
+    const displayNickname = myNickname.trim();
     if (!displayNickname || roomCodeInput.trim().length !== 6) {
       setError("닉네임 설정과 6자리 방 코드를 확인해 주세요.");
       return;
@@ -1427,27 +1324,16 @@ export function BlackWhiteOnline() {
               <p className="mt-2 text-sm text-red-100/75">1:1 리얼타임 한판승부 | 9라운드 | 5승 선취 즉시 종료</p>
             </div>
             {!userId ? (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAuthModalOpen(true)}
-                  className="rounded-md bg-[#bc260f] px-4 py-2 text-sm font-bold text-white"
-                >
-                  로그인
-                </button>
-              </div>
+              <Link href={entryHref} className="rounded-lg border border-red-200/30 px-3 py-1.5 text-sm">
+                BoardHub
+              </Link>
             ) : (
               <div className="flex flex-col items-end gap-1">
                 <div className="flex items-center gap-5">
                   <span className="text-sm text-red-100">{myNickname || "플레이어"}님 환영합니다!✋</span>
-                  <button
-                    type="button"
-                    onClick={logout}
-                    disabled={loading}
-                    className="rounded-lg border border-red-200/30 px-3 py-1.5 text-sm disabled:opacity-60"
-                  >
-                    로그아웃
-                  </button>
+                  <Link href={entryHref} className="rounded-lg border border-red-200/30 px-3 py-1.5 text-sm">
+                    BoardHub
+                  </Link>
                 </div>
                 <p className="mt-2 text-sm text-red-100/85">
                   {record.total}전 {record.wins}승 {record.losses}패 ({record.winRate}%)
@@ -1468,39 +1354,6 @@ export function BlackWhiteOnline() {
               className="mb-4 rounded-xl border border-emerald-400/30 bg-emerald-950/40 p-3 text-sm text-emerald-200"
             >
               {notice}
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {authModalOpen && !userId && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4"
-            >
-              <motion.div
-                initial={{ y: 14, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 14, opacity: 0 }}
-                className="w-full max-w-md rounded-xl border border-red-900/50 bg-slate-950 p-5"
-              >
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-lg font-bold">로그인</h3>
-                  <button type="button" onClick={() => setAuthModalOpen(false)} className="text-sm text-slate-300">
-                    닫기
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={signInWithGoogle}
-                  disabled={loading}
-                  className="mb-3 w-full rounded-lg border border-red-200/40 bg-white px-4 py-2 text-sm font-bold text-slate-900 disabled:opacity-60"
-                >
-                  Google로 로그인
-                </button>
-              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1550,30 +1403,40 @@ export function BlackWhiteOnline() {
           )}
         </AnimatePresence>
 
-        {userId && requiresNickname && (
-          <section className="mb-4 rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
-            <h2 className="mb-3 text-xl font-bold">닉네임 설정</h2>
-            <p className="mb-3 text-sm text-red-100/80">Google 로그인 후 최초 1회 닉네임을 설정해야 게임을 진행할 수 있습니다.</p>
-            <div className="flex flex-wrap gap-2">
-              <input
-                className="min-w-56 flex-1 rounded-lg border border-red-900/60 bg-black/40 px-3 py-2"
-                placeholder="닉네임"
-                value={nickname}
-                onChange={(e) => setNickname(e.target.value)}
-              />
-              <button
-                type="button"
-                onClick={saveNickname}
-                disabled={loading}
-                className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black disabled:opacity-60"
-              >
-                닉네임 저장
-              </button>
-            </div>
+        {!authLoading && !userId && (
+          <section className="rounded-2xl border border-red-900/50 bg-black/45 p-6 text-center backdrop-blur-md">
+            <h2 className="text-xl font-bold">로그인이 필요합니다.</h2>
+            <p className="mt-3 text-sm text-red-100/80">랜딩 페이지에서 로그인한 뒤 다시 이 게임으로 입장해 주세요.</p>
+            <Link
+              href={entryHref}
+              className="mt-5 inline-flex rounded-lg bg-red-500 px-4 py-2 text-sm font-bold text-black"
+            >
+              랜딩으로 이동
+            </Link>
           </section>
         )}
 
-        {userId && !requiresNickname && !inRoom && (
+        {userId && profileLoading && (
+          <section className="mb-4 rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
+            <h2 className="text-xl font-bold">닉네임 확인 중</h2>
+            <p className="mt-3 text-sm text-red-100/80">랜딩에서 저장한 닉네임 정보를 불러오고 있습니다.</p>
+          </section>
+        )}
+
+        {userId && !profileLoading && requiresNickname && (
+          <section className="mb-4 rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
+            <h2 className="text-xl font-bold">닉네임 설정이 필요합니다.</h2>
+            <p className="mt-3 text-sm text-red-100/80">닉네임 설정은 랜딩 페이지에서 진행합니다. 닉네임을 저장한 뒤 다시 입장해 주세요.</p>
+            <Link
+              href={entryHref}
+              className="mt-5 inline-flex rounded-lg bg-red-500 px-4 py-2 text-sm font-bold text-black"
+            >
+              랜딩으로 이동
+            </Link>
+          </section>
+        )}
+
+        {userId && !profileLoading && !requiresNickname && !inRoom && (
           <section className="rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
             <div className="mb-4">
               <h2 className="text-xl font-bold">Room Lobby</h2>
@@ -1610,7 +1473,7 @@ export function BlackWhiteOnline() {
           </section>
         )}
 
-        {userId && !requiresNickname && room && (
+        {userId && !profileLoading && !requiresNickname && room && (
           <section className="space-y-4">
             <div className="rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1864,15 +1727,14 @@ export function BlackWhiteOnline() {
 
         {!userId && (
           <section className="mt-6 rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
-            <div className="mb-4 flex items-center justify-between">
-            </div>
             <div className="overflow-hidden rounded-xl border border-red-900/40 bg-black/70">
-              <img
+              <Image
                 src="/images/landing.jpg"
                 alt="Landing"
+                width={1200}
+                height={720}
                 className="w-full rounded-xl border border-red-900/40 object-cover"
               />
-
             </div>
             <span className="mt-2 block w-full text-right text-xs text-red-100/70">Generated by ChatGPT</span>
           </section>
