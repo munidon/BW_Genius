@@ -840,7 +840,7 @@ end;
 $$;
 
 revoke execute on function public.bw_cleanup_stale_finished_rooms(interval) from anon, public;
-grant execute on function public.bw_cleanup_stale_finished_rooms(interval) to authenticated;
+grant execute on function public.bw_cleanup_stale_finished_rooms(interval) to service_role;
 
 create or replace function public.bw_get_room_reveals(p_room_id uuid)
 returns table(round_number int, player_id uuid, tile smallint)
