@@ -257,7 +257,7 @@ function formatTjError(raw: string, code?: string) {
   const lower = raw.toLowerCase();
 
   if (code === "PGRST202" || lower.includes("could not find the function public.tj_")) {
-    return "십이장기용 Supabase 함수가 아직 없습니다. docs/tj-schema.sql을 적용해 주세요.";
+    return "십이장기용 Supabase 함수가 아직 없습니다. docs/schemas/tj-schema.sql을 적용해 주세요.";
   }
 
   if (upper.includes("AUTH_REQUIRED")) return "로그인 후 다시 시도해 주세요.";
