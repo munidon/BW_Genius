@@ -3,8 +3,8 @@ import { AuthProvider } from "@/components/auth-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "보드게임 라운지",
-  description: "로그인 후 원하는 보드게임으로 입장하는 랜딩 페이지",
+  title: "BoardHub",
+  description: "원하는 보드게임을 웹에서 손쉽게!",
 };
 
 export default function RootLayout({
