@@ -65,26 +65,26 @@ export function BoardgameLanding() {
 
       <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6">
         <header className="rounded-[2rem] border border-white/10 bg-black/35 p-5 backdrop-blur-xl md:p-7">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-            <div className="max-w-2xl">
-              <p className="text-xs font-bold uppercase tracking-[0.45em] text-amber-100/75">BoardHub</p>
-              <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">
-                한 곳에서 고르고,
-                <br />
-                바로 입장하는,
-                <br />
-                보드게임 허브
-              </h1>
-              <p className="mt-4 max-w-xl text-sm leading-6 text-red-50/70 md:text-base">
-                로그인하고, 원하는 게임을 선택하면
-                <br />
-                해당 보드게임을 바로 즐기실 수 있습니다!
-              </p>
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div className="max-w-2xl text-center md:text-left">
+                <p className="text-xs font-bold uppercase tracking-[0.45em] text-amber-100/75">BoardHub</p>
+                <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">
+                  한 곳에서 고르고,
+                  <br />
+                  바로 입장하는,
+                  <br />
+                  보드게임 허브
+                </h1>
+                <p className="mt-4 max-w-xl text-sm leading-6 text-red-50/70 md:text-base">
+                  로그인하고, 원하는 게임을 선택하면
+                  <br />
+                  해당 보드게임을 바로 즐기실 수 있습니다!
+                </p>
+              </div>
             </div>
 
-
-
-            <div className="mt-4 rounded-[1.25rem] border border-white/10 bg-black/30 p-4">
+            <div className="rounded-[1.25rem] border border-white/10 bg-black/30 p-4">
               {isLoading || profileLoading ? (
                 <p className="text-sm text-red-50/70">계정 정보를 확인하는 중입니다.</p>
               ) : userId && requiresNickname ? (
@@ -142,7 +142,6 @@ export function BoardgameLanding() {
                 </div>
               )}
             </div>
-
           </div>
         </header>
 
@@ -180,9 +179,20 @@ export function BoardgameLanding() {
                     className="h-44 w-full object-cover"
                   />
                 ) : (
-                  <div className="flex h-44 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.12),transparent_55%),linear-gradient(135deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))] px-6 text-center">
+                  <div
+                    className={`flex h-44 items-center justify-center px-6 text-center ${game.available
+                        ? "bg-[radial-gradient(circle_at_top,rgba(163,230,53,0.16),transparent_55%),linear-gradient(135deg,rgba(16,185,129,0.18),rgba(255,255,255,0.02))]"
+                        : "bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.12),transparent_55%),linear-gradient(135deg,rgba(255,255,255,0.04),rgba(255,255,255,0.01))]"
+                      }`}
+                  >
                     <div>
-                      <p className="text-xl font-bold uppercase tracking-[0.35em] text-amber-100/60">Coming Soon</p>
+                      <p
+                        className={`text-xl font-bold uppercase tracking-[0.35em] ${game.available ? "text-lime-100/75" : "text-amber-100/60"
+                          }`}
+                      >
+                        {game.available ? game.subtitle : "Coming Soon"}
+                      </p>
+                      {game.available && <p className="mt-3 text-sm font-bold text-emerald-50/70">PLAY NOW</p>}
                     </div>
                   </div>
                 )}

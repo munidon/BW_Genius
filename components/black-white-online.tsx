@@ -1316,30 +1316,32 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-8 text-slate-100 md:px-8">
-      <div className="mx-auto w-full max-w-5xl">
-        <header className="mb-6 rounded-2xl border border-red-900/50 bg-black/40 p-5 backdrop-blur-md">
-          <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="mx-auto w-full max-w-6xl">
+        <header className="mb-6 rounded-[2rem] border border-red-200/10 bg-[#170505]/75 p-5 shadow-[0_30px_80px_rgba(24,6,6,0.45)] backdrop-blur-xl md:p-7">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h1 className="text-3xl font-black tracking-wide md:text-4xl">🍙 흑과 백</h1>
-              <p className="mt-2 text-sm text-red-100/75">1:1 리얼타임 한판승부 | 9라운드 | 5승 선취 즉시 종료</p>
+              <p className="text-xs font-bold uppercase tracking-[0.42em] text-red-100/70">Black & White</p>
+              <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">흑 과 백</h1>
+              <p className="mt-3 text-sm leading-6 text-red-100/75 md:text-base">
+                낮은 수로 큰 수를 잡는 쾌감,
+                <br />
+                상대의 정보를 뚫고 들어갈 단 한 번의 베팅
+              </p>
             </div>
-            {!userId ? (
-              <Link href={entryHref} className="rounded-lg border border-red-200/30 px-3 py-1.5 text-sm">
+
+            <div className="rounded-[1.4rem] border border-red-200/10 bg-black/20 p-4">
+              <p className="text-xs font-bold uppercase tracking-[0.35em] text-red-100/70">My Record</p>
+              <p className="mt-2 text-lg font-bold text-white">{myNickname || "플레이어"}</p>
+              <p className="mt-2 text-sm text-red-100/75">
+                {record.total}전 {record.wins}승 {record.losses}패 ({record.winRate}%)
+              </p>
+              <Link
+                href={entryHref}
+                className="mt-4 inline-flex rounded-full border border-red-100/20 px-4 py-2 text-sm font-bold text-red-50/90 transition hover:bg-white/5"
+              >
                 BoardHub
               </Link>
-            ) : (
-              <div className="flex flex-col items-end gap-1">
-                <div className="flex items-center gap-5">
-                  <span className="text-sm text-red-100">{myNickname || "플레이어"}님 환영합니다!✋</span>
-                  <Link href={entryHref} className="rounded-lg border border-red-200/30 px-3 py-1.5 text-sm">
-                    BoardHub
-                  </Link>
-                </div>
-                <p className="mt-2 text-sm text-red-100/85">
-                  {record.total}전 {record.wins}승 {record.losses}패 ({record.winRate}%)
-                </p>
-              </div>
-            )}
+            </div>
           </div>
         </header>
 
