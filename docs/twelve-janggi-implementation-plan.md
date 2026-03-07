@@ -39,7 +39,7 @@
    - 왕 잡기 승리 판정
    - 왕 침투 승리 판정
 2. 전용 SQL 문서를 추가한다.
-   - 예시 파일명: `docs/supabase-twelve-janggi.sql`
+   - 예시 파일명: `docs/tj-schema.sql`
 3. RPC를 게임 흐름별로 분리한다.
    - `create_room`
    - `join_room`

@@ -111,8 +111,8 @@ export function BoardgameLanding() {
                   </div>
                 </div>
               ) : userId ? (
-                <div className="flex items-center justify-between gap-4">
-                  <div>
+                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                  <div className="min-w-0">
                     <p className="text-xs font-bold uppercase tracking-[0.35em] text-amber-100/70">Welcome</p>
                     <p className="mt-2 text-lg font-bold text-white">{nickname || "플레이어"}</p>
                     <p className="mt-1 text-sm text-red-50/65">원하는 게임을 선택해서 즐겨주세요!</p>
@@ -121,14 +121,14 @@ export function BoardgameLanding() {
                     type="button"
                     onClick={() => void logout()}
                     disabled={isBusy}
-                    className="rounded-full border border-white/15 bg-white/8 px-4 py-2 text-sm font-bold text-white transition hover:bg-white/15 disabled:opacity-60"
+                    className="shrink-0 whitespace-nowrap rounded-full border border-white/15 bg-white/8 px-4 py-2 text-sm font-bold text-white transition hover:bg-white/15 disabled:opacity-60"
                   >
                     로그아웃
                   </button>
                 </div>
               ) : (
-                <div className="flex items-center justify-between gap-4">
-                  <div>
+                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                  <div className="min-w-0">
                     <p className="text-xs font-bold uppercase tracking-[0.35em] text-amber-100/70">Log in</p>
                     <p className="mt-2 text-lg font-bold text-white">로그인 후 게임에 입장할 수 있습니다!</p>
                   </div>
@@ -136,7 +136,7 @@ export function BoardgameLanding() {
                     type="button"
                     onClick={openLoginModal}
                     disabled={isBusy}
-                    className="rounded-full bg-[#d84627] px-4 py-2 text-sm font-black text-white transition hover:bg-[#ee5738] disabled:opacity-60"
+                    className="shrink-0 whitespace-nowrap rounded-full bg-[#d84627] px-4 py-2 text-sm font-black text-white transition hover:bg-[#ee5738] disabled:opacity-60"
                   >
                     로그인
                   </button>

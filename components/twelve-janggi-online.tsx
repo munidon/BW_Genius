@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
 import { AdsenseBanner } from "@/components/adsense-banner";
+import { StarterCoinOverlay, STARTER_COIN_OVERLAY_DURATION_MS, type StarterRole } from "@/components/starter-coin-overlay";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { supabase } from "@/lib/supabase";
@@ -256,7 +257,7 @@ function formatTjError(raw: string, code?: string) {
   const lower = raw.toLowerCase();
 
   if (code === "PGRST202" || lower.includes("could not find the function public.tj_")) {
-    return "십이장기용 Supabase 함수가 아직 없습니다. docs/supabase-twelve-janggi.sql을 적용해 주세요.";
+    return "십이장기용 Supabase 함수가 아직 없습니다. docs/tj-schema.sql을 적용해 주세요.";
   }
 
   if (upper.includes("AUTH_REQUIRED")) return "로그인 후 다시 시도해 주세요.";
@@ -349,6 +350,8 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
   const [realtimeSubscribed, setRealtimeSubscribed] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(true);
   const [showVerdict, setShowVerdict] = useState(false);
+  const [showStarterCoin, setShowStarterCoin] = useState(false);
+  const [starterRole, setStarterRole] = useState<StarterRole | null>(null);
   const [lastRoomSnapshot, setLastRoomSnapshot] = useState<TjRoom | null>(null);
 
   const roomRef = useRef<TjRoom | null>(null);
@@ -356,6 +359,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
   const latestRoomFetchSeqRef = useRef(0);
   const latestMoveLogFetchSeqRef = useRef(0);
   const cleanupTriggeredUsersRef = useRef<Set<string>>(new Set());
+  const previousRoomStatusRef = useRef<TjRoomStatus | null>(null);
 
   useEffect(() => {
     roomRef.current = room;
@@ -375,6 +379,8 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
     setSelectedHandCode(null);
     setLeaveConfirmOpen(false);
     setShowVerdict(false);
+    setShowStarterCoin(false);
+    setStarterRole(null);
     setLastRoomSnapshot(null);
   }, []);
 
@@ -617,6 +623,38 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
 
     return () => clearInterval(timer);
   }, [isPageVisible, loadLatestRoom, loadMyRecord, realtimeSubscribed, room, userId]);
+
+  useEffect(() => {
+    if (!room) {
+      previousRoomStatusRef.current = null;
+      setShowStarterCoin(false);
+      setStarterRole(null);
+      return;
+    }
+
+    const previousStatus = previousRoomStatusRef.current;
+    if (previousStatus === "waiting" && room.status === "playing" && userId && room.first_turn_owner) {
+      const role =
+        (room.first_turn_owner === "host" && room.host_id === userId) ||
+        (room.first_turn_owner === "guest" && room.guest_id === userId)
+          ? "lead"
+          : "follow";
+      setStarterRole(role);
+      setShowStarterCoin(true);
+    }
+
+    previousRoomStatusRef.current = room.status;
+  }, [room, userId]);
+
+  useEffect(() => {
+    if (!showStarterCoin) return;
+
+    const timer = setTimeout(() => {
+      setShowStarterCoin(false);
+    }, STARTER_COIN_OVERLAY_DURATION_MS);
+
+    return () => clearTimeout(timer);
+  }, [showStarterCoin]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1059,7 +1097,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                 <p className="mt-3 text-sm text-emerald-50/75">
                   {room.status === "playing"
                     ? "지금 나가면 즉시 기권 처리되고 상대 승리로 게임이 종료됩니다."
-                    : "나가면 현재 방에서 빠져나옵니다."}
+                    : "방에서 나가면 Room Lobby로 돌아갑니다."}
                 </p>
                 <div className="mt-5 flex justify-end gap-2">
                   <button
@@ -1322,12 +1360,12 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                   <div>
                     <p className="text-xs font-bold uppercase tracking-[0.35em] text-lime-100/70">Battlefield</p>
                     <h2 className="mt-2 text-2xl font-black text-white">
-                      {room.status === "waiting" ? "초기 배치 미리보기" : room.status === "playing" ? "실시간 대국 중" : "최종 보드 상태"}
+                      {room.status === "waiting" ? "초기 배치 미리보기" : room.status === "playing" ? "" : "최종 보드 상태"}
                     </h2>
                   </div>
                   <div className="text-right text-xs text-emerald-50/70">
                     <p>내 진영은 아래쪽에 고정됩니다.</p>
-                    <p>초록 표시 칸은 현재 선택된 행동이 가능한 칸입니다.</p>
+                    <p>말을 선택하면 이동 가능한 영역이 표시됩니다.</p>
                   </div>
                 </div>
 
@@ -1355,11 +1393,9 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                           const isLastFrom = lastMove?.from_cell === canonicalCell;
                           const isLastTo = lastMove?.to_cell === canonicalCell;
                           const cellRow = rowFromTjCell(viewCell);
-                          const cellTheme = cellRow === 0
-                            ? "border-emerald-300/15 bg-emerald-950/65"
-                            : cellRow === 3
-                              ? "border-lime-300/15 bg-lime-950/45"
-                              : "border-emerald-100/10 bg-[#0a221a]/75";
+                          const cellTheme = cellRow === 0 || cellRow === 3
+                            ? "border-lime-300/15 bg-lime-950/45"
+                            : "border-emerald-100/10 bg-[#0a221a]/75";
                           const interactive = room.status === "playing" && myTurn;
 
                           return (
@@ -1370,7 +1406,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                               disabled={!interactive}
                               whileHover={interactive ? { y: -2 } : undefined}
                               whileTap={interactive ? { scale: 0.98 } : undefined}
-                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-2 text-left transition ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
+                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-10 text-left transition ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
                                 } ${isSelectedCell
                                   ? "border-white/80 ring-2 ring-white shadow-[0_0_0_1px_rgba(255,255,255,0.4)]"
                                   : isMoveTarget || isDropTarget
@@ -1380,10 +1416,6 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                                 }`}
                             >
                               <div className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-white/5 to-transparent" />
-                              <span className="absolute left-2 top-2 text-[10px] font-bold text-emerald-50/35">
-                                {formatTjCellLabel(canonicalCell)}
-                              </span>
-
                               {(isMoveTarget || isDropTarget) && !piece && (
                                 <div className="absolute inset-0 flex items-center justify-center">
                                   <div className="h-4 w-4 rounded-full bg-lime-200/80 shadow-[0_0_18px_rgba(190,242,100,0.45)]" />
@@ -1474,16 +1506,17 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                     lines={[
                       "3열 x 4행, 총 12칸",
                       "내 진영은 항상 아래쪽으로 표시",
-                      "장/상/왕/자 4개로 시작",
+                      "CEO/부장/대리/인턴 4개로 시작",
                     ]}
                   />
                   <RuleCard
                     title="이동과 승격"
                     lines={[
-                      "장: 상하좌우 1칸",
-                      "상: 대각선 4방향 1칸",
-                      "왕: 전 방향 1칸",
-                      "자: 전방 1칸, 상대 진영 진입 시 후",
+                      "CEO: 전 방향 1칸",
+                      "부장: 상하좌우 1칸",
+                      "대리: 대각선 4방향 1칸",
+                      "인턴: 전방 1칸, 상대 진영 진입 시 신입사원",
+                      "신입사원: 상하좌우 및 좌상, 우상"
                     ]}
                   />
                   <RuleCard
@@ -1491,29 +1524,20 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                     lines={[
                       "잡은 말은 다음 턴부터 내 포로로 사용",
                       "포로는 상대 진영에 내려놓을 수 없음",
-                      "왕 포획 또는 왕 침투 버티기 성공 시 승리",
+                      "CEO 포획 또는 CEO 침투 버티기 성공 시 승리",
                     ]}
                   />
                 </div>
-                <p className="mt-4 rounded-full border border-emerald-100/20 px-4 py-2 text-sm font-bold text-emerald-50/85">
-                  규칙 문서 위치: `docs/twelve-janggi-rules.md`
-                </p>
+
               </section>
 
-              <section className="rounded-[1.75rem] border border-emerald-200/10 bg-[#071611]/75 p-5 backdrop-blur-xl">
-                <p className="text-xs font-bold uppercase tracking-[0.35em] text-lime-100/70">Server Notes</p>
-                <h3 className="mt-2 text-xl font-black text-white">Supabase 분리 상태</h3>
-                <div className="mt-4 space-y-3 text-sm text-emerald-50/75">
-                  <p>`tj_rooms`, `tj_move_logs`, `tj_player_stats` 전용 구조를 기준으로 동작합니다.</p>
-                  <p>RPC가 아직 없다면 화면 상단에 SQL 적용 안내가 표시됩니다.</p>
-                  <p>현재 화면은 `흑과백` 데이터와 채널 이름을 공유하지 않도록 설계했습니다.</p>
-                </div>
-              </section>
+
             </div>
           </section>
         )}
       </div>
 
+      <AnimatePresence>{showStarterCoin && starterRole && <StarterCoinOverlay role={starterRole} />}</AnimatePresence>
       <AnimatePresence>{showVerdict && myResultText && <AnimatedVerdict text={myResultText} />}</AnimatePresence>
     </main>
   );
@@ -1558,7 +1582,7 @@ function PieceToken({
 
   return (
     <div
-      className={`relative flex h-full w-full flex-col items-center justify-center rounded-[0.95rem] border px-2 py-3 shadow-lg ${mine
+      className={`relative flex h-full w-full flex-col items-center justify-center rounded-[0.95rem] border px-4 py-5 shadow-lg ${mine
         ? "border-lime-200/60 bg-gradient-to-br from-lime-100 to-emerald-100 text-[#163423]"
         : "border-emerald-300/30 bg-gradient-to-br from-[#143228] to-[#091912] text-emerald-50"
         } ${emphasized ? "scale-[1.02] shadow-[0_0_0_1px_rgba(255,255,255,0.55)_inset]" : ""}`}
@@ -1571,7 +1595,7 @@ function PieceToken({
         alt={`${piece.owner === "host" ? "호스트" : "게스트"} ${pieceLabel}`}
         className="flex h-full w-full items-center justify-center"
         sizes="(max-width: 768px) 96px, 160px"
-        imageClassName={`object-contain p-1.5 drop-shadow-[0_10px_18px_rgba(0,0,0,0.28)] ${mine ? "" : "rotate-180"}`}
+        imageClassName={`object-contain p-0 drop-shadow-[0_10px_18px_rgba(0,0,0,0.28)] ${mine ? "" : "rotate-180"}`}
         fallback={(
           <div className="flex flex-col items-center justify-center">
             <span className="text-3xl font-black leading-none">{pieceLabel}</span>

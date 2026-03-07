@@ -115,6 +115,6 @@
 - [흑과 백 규칙서](./docs/black-white-rules.md)
 - [십이장기 규칙서](./docs/twelve-janggi-rules.md)
 - [보드게임 UI 공통 지침](./docs/boardgame-ui-guidelines.md)
-- [흑과 백 Supabase 스키마](./docs/supabase-schema.sql)
-- [십이장기 Supabase 스키마](./docs/supabase-twelve-janggi.sql)
+- [흑과 백 Supabase 스키마](./docs/bw-schema.sql)
+- [십이장기 Supabase 스키마](./docs/tj-schema.sql)
 - [오디오 에셋 정리 문서](./docs/audio-sourcing-guide.md)

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
 import { AdsenseBanner } from "@/components/adsense-banner";
+import { StarterCoinOverlay, STARTER_COIN_OVERLAY_DURATION_MS } from "@/components/starter-coin-overlay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { ALL_TILES, tileColor } from "@/lib/game";
@@ -18,11 +19,6 @@ type SfxKey = "uiClick" | "tileSubmit" | "readyConfirm" | "gameStart" | "victory
 const LOBBY_BGM_SRC = "/audio/bgm/lobby-loop.mp3";
 const WAITING_BGM_SRC = "/audio/bgm/waiting-loop.mp3";
 const PLAYING_BGM_SRC = "/audio/bgm/playing-loop.mp3";
-const START_ORDER_COIN_FRONT_SRC = "/images/start-order/coin-front.jpg";
-const START_ORDER_COIN_BACK_SRC = "/images/start-order/coin-back.jpg";
-
-const STARTER_COIN_SPIN_DURATION_SEC = 2.25;
-const STARTER_COIN_RESULT_HOLD_MS = 1500;
 const BGM_VOLUME = 0.45;
 const SFX_SOURCES: Record<SfxKey, string> = {
   uiClick: "/audio/sfx/current/ui-click.ogg",
@@ -105,6 +101,13 @@ interface RoomRevealRow {
   tile: number;
 }
 
+const EMPTY_RECORD: PlayerRecord = {
+  total: 0,
+  wins: 0,
+  losses: 0,
+  winRate: 0,
+};
+
 function makeRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -118,6 +121,18 @@ function tileClass(tile: number) {
   return tileColor(tile) === "black"
     ? "bg-slate-950 text-slate-100 border-slate-700"
     : "bg-slate-100 text-slate-900 border-slate-300";
+}
+
+function statusLabel(status: RoomStatus) {
+  if (status === "waiting") return "대기 중";
+  if (status === "playing") return "진행 중";
+  return "종료";
+}
+
+function statusChipClasses(status: RoomStatus) {
+  if (status === "waiting") return "border border-red-300/25 bg-red-300/10 text-red-100";
+  if (status === "playing") return "border border-amber-300/25 bg-amber-300/10 text-amber-100";
+  return "border border-white/15 bg-white/10 text-white";
 }
 
 function AnimatedVerdict({ text }: { text: string }) {
@@ -139,114 +154,6 @@ function AnimatedVerdict({ text }: { text: string }) {
             {char}
           </motion.span>
         ))}
-      </div>
-    </motion.div>
-  );
-}
-
-function StarterCoinOverlay({ role }: { role: "lead" | "follow" }) {
-  const [imageFailed, setImageFailed] = useState(false);
-  const finalRotation = role === "lead" ? 720 : 900;
-  const roleLabel = role === "lead" ? "先 플레이어" : "後 플레이어";
-  const coinDepthPx = 16;
-
-  useEffect(() => {
-    let active = true;
-    let loaded = 0;
-    const onLoad = () => {
-      loaded += 1;
-      if (active && loaded === 2) setImageFailed(false);
-    };
-    const onError = () => {
-      if (active) setImageFailed(true);
-    };
-
-    const frontProbe = new window.Image();
-    frontProbe.onload = onLoad;
-    frontProbe.onerror = onError;
-    frontProbe.src = START_ORDER_COIN_FRONT_SRC;
-
-    const backProbe = new window.Image();
-    backProbe.onload = onLoad;
-    backProbe.onerror = onError;
-    backProbe.src = START_ORDER_COIN_BACK_SRC;
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-sm"
-    >
-      <div className="flex flex-col items-center gap-5" style={{ perspective: "1000px", WebkitPerspective: "1000px" }}>
-        <motion.div
-          initial={{ rotateY: 0, rotateX: -6, scale: 0.85, opacity: 0.7 }}
-          animate={{ rotateY: [0, 360, 540, finalRotation], rotateX: [-6, -2, 0, 0], scale: [0.85, 1.04, 1], opacity: [0.7, 1, 1] }}
-          transition={{
-            duration: STARTER_COIN_SPIN_DURATION_SEC,
-            times: [0, 0.5, 0.78, 1],
-            ease: ["easeIn", "linear", "easeOut"],
-          }}
-          style={{
-            transformStyle: "preserve-3d",
-            WebkitTransformStyle: "preserve-3d",
-            transformOrigin: "50% 50%",
-            WebkitTransformOrigin: "50% 50%",
-          }}
-          className="relative h-52 w-52 md:h-64 md:w-64"
-        >
-          <div
-            className={`absolute inset-0 overflow-hidden rounded-full border-2 border-amber-100/80 shadow-[0_18px_40px_rgba(0,0,0,0.55)] ${imageFailed ? "bg-gradient-to-br from-amber-500 to-amber-700" : ""}`}
-            style={{
-              transform: `translateZ(${coinDepthPx / 2}px)`,
-              backfaceVisibility: "hidden",
-              WebkitBackfaceVisibility: "hidden",
-              transformStyle: "preserve-3d",
-              WebkitTransformStyle: "preserve-3d",
-              ...(imageFailed
-                ? {}
-                : {
-                  backgroundImage: `url(${START_ORDER_COIN_FRONT_SRC})`,
-                  backgroundSize: "108%",
-                  backgroundPosition: "center",
-                }),
-            }}
-          >
-            {imageFailed && <div className="flex h-full items-center justify-center text-8xl font-black text-amber-100">先</div>}
-          </div>
-          <div
-            className={`absolute inset-0 overflow-hidden rounded-full border-2 border-amber-100/80 shadow-[0_18px_40px_rgba(0,0,0,0.55)] ${imageFailed ? "bg-gradient-to-br from-amber-500 to-amber-700" : ""}`}
-            style={{
-              transform: `translateZ(${-coinDepthPx / 2}px) rotateY(180deg)`,
-              backfaceVisibility: "hidden",
-              WebkitBackfaceVisibility: "hidden",
-              transformStyle: "preserve-3d",
-              WebkitTransformStyle: "preserve-3d",
-              ...(imageFailed
-                ? {}
-                : {
-                  backgroundImage: `url(${START_ORDER_COIN_BACK_SRC})`,
-                  backgroundSize: "108%",
-                  backgroundPosition: "center",
-                }),
-            }}
-          >
-            {imageFailed && <div className="flex h-full items-center justify-center text-8xl font-black text-amber-100">後</div>}
-          </div>
-        </motion.div>
-        <motion.p
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35, delay: Math.max(0.1, STARTER_COIN_SPIN_DURATION_SEC - 0.4) }}
-          className="text-2xl font-black tracking-wide text-amber-100 md:text-3xl"
-        >
-          {roleLabel}
-        </motion.p>
       </div>
     </motion.div>
   );
@@ -276,7 +183,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
   const [showVerdict, setShowVerdict] = useState(false);
   const [showStarterCoin, setShowStarterCoin] = useState(false);
   const [starterRole, setStarterRole] = useState<"lead" | "follow" | null>(null);
-  const [record, setRecord] = useState<PlayerRecord>({ total: 0, wins: 0, losses: 0, winRate: 0 });
+  const [record, setRecord] = useState<PlayerRecord>(EMPTY_RECORD);
   const [revealedRows, setRevealedRows] = useState<RoomRevealRow[]>([]);
   const [, setRevealsLoadedForRoomId] = useState<string | null>(null);
   const [lastRoomSnapshot, setLastRoomSnapshot] = useState<BwRoom | null>(null);
@@ -538,7 +445,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     if (!showStarterCoin) return;
     const t = setTimeout(() => {
       setShowStarterCoin(false);
-    }, Math.round(STARTER_COIN_SPIN_DURATION_SEC * 1000) + STARTER_COIN_RESULT_HOLD_MS);
+    }, STARTER_COIN_OVERLAY_DURATION_MS);
     return () => clearTimeout(t);
   }, [showStarterCoin]);
 
@@ -565,14 +472,8 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
 
   const hostName = room?.host_id ? profiles[room.host_id] ?? "호스트" : "호스트";
   const guestName = room?.guest_id ? profiles[room.guest_id] ?? "게스트" : "게스트";
-  const hostRecord = useMemo(() => {
-    if (!room) return null;
-    return profileRecords[room.host_id] ?? null;
-  }, [room, profileRecords]);
-  const guestRecord = useMemo(() => {
-    if (!room?.guest_id) return null;
-    return profileRecords[room.guest_id] ?? null;
-  }, [room, profileRecords]);
+  const hostRecord = room ? profileRecords[room.host_id] ?? EMPTY_RECORD : EMPTY_RECORD;
+  const guestRecord = room?.guest_id ? profileRecords[room.guest_id] ?? EMPTY_RECORD : EMPTY_RECORD;
   const revealedRoundRows = useMemo(() => {
     if (!room || room.status !== "finished") return [];
     const roundNumbers = [...new Set([...rounds.map((r) => r.round_number), ...revealedRows.map((r) => r.round_number)])].sort((a, b) => a - b);
@@ -594,6 +495,33 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     if (!room.winner_id) return false;
     return currentRoundResult === null;
   }, [room, currentRoundResult]);
+
+  const activePlayerId = useMemo(() => {
+    if (!room || room.status !== "playing" || !currentRound) return null;
+    if (room.round_phase === "await_lead") return currentRound.lead_player_id;
+    if (room.round_phase === "await_follow") return currentRound.follow_player_id;
+    return null;
+  }, [currentRound, room]);
+
+  const hostLobbyState = useMemo(() => {
+    if (!room) return "상태 대기";
+    if (room.status === "waiting") return "상태 대기";
+    if (room.status === "playing") {
+      return activePlayerId === room.host_id ? "현재 차례" : "대기 중";
+    }
+    if (!room.winner_id) return "상태 무승부";
+    return room.winner_id === room.host_id ? "상태 승리" : "상태 패배";
+  }, [activePlayerId, room]);
+
+  const guestLobbyState = useMemo(() => {
+    if (!room) return "상태 미준비";
+    if (room.status === "waiting") return `상태 ${room.guest_ready ? "준비 완료" : "미준비"}`;
+    if (room.status === "playing") {
+      return room.guest_id && activePlayerId === room.guest_id ? "현재 차례" : "대기 중";
+    }
+    if (!room.winner_id) return "상태 무승부";
+    return room.guest_id && room.winner_id === room.guest_id ? "상태 승리" : "상태 패배";
+  }, [activePlayerId, room]);
 
   const myScore = useMemo(() => {
     if (!room || !myRole) return 0;
@@ -652,7 +580,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     userIdRef.current = null;
     emptyRoomReadCountRef.current = 0;
     setProfiles({});
-    setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
+    setRecord(EMPTY_RECORD);
     setProfileRecords({});
     clearRoomScopedState();
     setLeaveConfirmOpen(false);
@@ -711,7 +639,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     if (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current) return;
 
     if (profileError || !data) {
-      setRecord({ total: 0, wins: 0, losses: 0, winRate: 0 });
+      setRecord(EMPTY_RECORD);
       return;
     }
 
@@ -1146,6 +1074,18 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     setLoading(false);
   };
 
+  const copyRoomCode = async () => {
+    if (!room) return;
+
+    try {
+      await navigator.clipboard.writeText(room.room_code);
+      setError("");
+      setNotice("방 코드를 복사했습니다.");
+    } catch {
+      setError("방 코드를 복사하지 못했습니다. 다시 시도해 주세요.");
+    }
+  };
+
   const setGuestReady = async (ready: boolean) => {
     if (!supabase || !room) return;
     setLoading(true);
@@ -1486,48 +1426,49 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
         {userId && !profileLoading && !requiresNickname && room && (
           <section className="space-y-4">
             <div className="rounded-2xl border border-red-900/50 bg-black/45 p-5 backdrop-blur-md">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm text-red-100/70">ROOM CODE</p>
-                  <p className="text-2xl font-black tracking-[0.2em] text-red-100">{room.room_code}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-red-100/70">STATUS</p>
-                  <p className="font-bold uppercase">{room.status}</p>
-                </div>
+              <div className={`flex flex-wrap items-start gap-4 ${room.status === "waiting" ? "justify-between" : "justify-end"}`}>
+                {room.status === "waiting" && (
+                  <div>
+                    <p className="text-sm text-red-100/70">ROOM CODE</p>
+                    <div className="mt-2 flex items-center gap-3">
+                      <p className="text-2xl font-black tracking-[0.2em] text-red-100">{room.room_code}</p>
+                      <button
+                        type="button"
+                        onClick={() => void copyRoomCode()}
+                        className="rounded-lg border border-red-100/20 px-3 py-1 text-xs font-bold text-red-50/80 transition hover:bg-white/5"
+                      >
+                        복사
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {room.status === "waiting" ? (
+                  <div className="text-right">
+                    <p className="text-sm text-red-100/70">STATUS</p>
+                    <p className="font-bold uppercase">{room.status}</p>
+                  </div>
+                ) : (
+                  <div className={`rounded-full px-3 py-1 text-xs font-bold ${statusChipClasses(room.status)}`}>
+                    {statusLabel(room.status)}
+                  </div>
+                )}
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div
-                  className={`rounded-xl bg-black/35 p-3 ${room.status === "waiting" && room.host_id
-                    ? "border-2 border-white/90"
-                    : "border border-red-900/40"
-                    }`}
-                >
-                  <p className="text-sm text-red-100/70">호스트</p>
-                  <p className="text-lg font-bold">{hostName}</p>
-                  <p className="text-sm">점수 {room.host_score}</p>
-                  {room.status === "waiting" && hostRecord && (
-                    <p className="mt-1 text-xs text-red-100/80">
-                      전적 {hostRecord.total}전 {hostRecord.wins}승 {hostRecord.losses}패 ({hostRecord.winRate}%)
-                    </p>
-                  )}
-                </div>
-                <div
-                  className={`rounded-xl bg-black/35 p-3 ${room.status === "waiting" && room.guest_id
-                    ? "border-2 border-white/90"
-                    : "border border-red-900/40"
-                    }`}
-                >
-                  <p className="text-sm text-red-100/70">게스트</p>
-                  <p className="text-lg font-bold">{guestName}</p>
-                  <p className="text-sm">점수 {room.guest_score}</p>
-                  {room.status === "waiting" && guestRecord && (
-                    <p className="mt-1 text-xs text-red-100/80">
-                      전적 {guestRecord.total}전 {guestRecord.wins}승 {guestRecord.losses}패 ({guestRecord.winRate}%)
-                    </p>
-                  )}
-                </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <PlayerCard
+                  title="호스트"
+                  name={hostName}
+                  record={hostRecord}
+                  emphasized={myRole === "host" || room.status === "waiting"}
+                  stateText={hostLobbyState}
+                />
+                <PlayerCard
+                  title="게스트"
+                  name={guestName}
+                  record={guestRecord}
+                  emphasized={myRole === "guest" || room.status === "waiting"}
+                  stateText={guestLobbyState}
+                />
               </div>
 
               {room.status === "waiting" && (
@@ -1536,7 +1477,8 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
                     <button
                       type="button"
                       onClick={() => setGuestReady(!room.guest_ready)}
-                      className="rounded-lg bg-emerald-400 px-4 py-2 font-bold text-black"
+                      disabled={loading}
+                      className="rounded-lg bg-emerald-400 px-4 py-2 font-bold text-black disabled:opacity-60"
                     >
                       {room.guest_ready ? "준비 취소" : "준비"}
                     </button>
@@ -1545,8 +1487,8 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
                   {myRole === "host" && (
                     <button
                       type="button"
-                      onClick={startGame}
-                      disabled={!room.guest_id || !room.guest_ready}
+                      onClick={() => void startGame()}
+                      disabled={loading || !room.guest_id || !room.guest_ready}
                       className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black disabled:opacity-40"
                     >
                       게임 시작
@@ -1787,9 +1729,36 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       </div>
 
       <AnimatePresence>{flyingTile !== null && <FlyingTile tile={flyingTile} />}</AnimatePresence>
-      <AnimatePresence>{showStarterCoin && starterRole && <StarterCoinOverlay role={starterRole} />}</AnimatePresence>
+      <AnimatePresence>
+        {showStarterCoin && starterRole && <StarterCoinOverlay role={starterRole} />}
+      </AnimatePresence>
       <AnimatePresence>{showVerdict && myResultText && <AnimatedVerdict text={myResultText} />}</AnimatePresence>
     </main>
+  );
+}
+
+function PlayerCard({
+  title,
+  name,
+  record,
+  emphasized,
+  stateText,
+}: {
+  title: string;
+  name: string;
+  record: PlayerRecord;
+  emphasized: boolean;
+  stateText: string;
+}) {
+  return (
+    <div className={`rounded-xl bg-black/35 p-3 ${emphasized ? "border-2 border-white/90" : "border border-red-900/40"}`}>
+      <p className="text-sm text-red-100/70">{title}</p>
+      <p className="text-lg font-bold">{name}</p>
+      <p className="text-sm">{stateText}</p>
+      <p className="mt-1 text-xs text-red-100/80">
+        전적 {record.total}전 {record.wins}승 {record.losses}패 ({record.winRate}%)
+      </p>
+    </div>
   );
 }
 
