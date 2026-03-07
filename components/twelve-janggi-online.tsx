@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
+import { AdsenseBanner } from "@/components/adsense-banner";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { supabase } from "@/lib/supabase";
@@ -1012,6 +1013,13 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
             </div>
           </div>
         </header>
+
+        <AdsenseBanner
+          className="mb-4 border-emerald-200/10 bg-[#051712]/45"
+          labelClassName="text-emerald-50/45"
+          description="십이장기 상단 광고 영역"
+          title="Sponsored"
+        />
 
         {error && (
           <div className="mb-4 rounded-2xl border border-rose-300/20 bg-rose-950/30 p-4 text-sm text-rose-100">

@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { AdsenseBanner } from "@/components/adsense-banner";
 import { useAuth } from "@/components/auth-provider";
 import { BOARD_GAMES } from "@/lib/board-games";
 
@@ -144,6 +145,8 @@ export function BoardgameLanding() {
             </div>
           </div>
         </header>
+
+        <AdsenseBanner className="mt-[-0.25rem]" />
 
         {error && (
           <div className="rounded-2xl border border-red-400/30 bg-red-950/40 p-4 text-sm text-red-100">

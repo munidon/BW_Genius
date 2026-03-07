@@ -3,6 +3,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
+import { AdsenseBanner } from "@/components/adsense-banner";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { ALL_TILES, tileColor } from "@/lib/game";
@@ -1344,6 +1345,13 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
             </div>
           </div>
         </header>
+
+        <AdsenseBanner
+          className="mb-4 border-red-200/10 bg-[#170505]/45"
+          labelClassName="text-red-100/45"
+          description="흑과 백 상단 광고 영역"
+          title="Sponsored"
+        />
 
         {error && <div className="mb-4 rounded-xl border border-red-400/30 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
         <AnimatePresence>
