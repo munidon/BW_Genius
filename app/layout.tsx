@@ -15,13 +15,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko">
-      <body>
+      <head>
         <Script
           async
           src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5091515187087145"
           crossOrigin="anonymous"
           strategy="afterInteractive"
         />
+      </head>
+      <body>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
