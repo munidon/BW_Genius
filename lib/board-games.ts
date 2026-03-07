@@ -25,7 +25,7 @@ export const BOARD_GAMES: BoardGameEntry[] = [
     description: "1:1 실시간 수싸움. 포로를 활용하고 왕 침투를 완성해 승리를 가져오세요!",
     href: "/games/twelve-janggi",
     available: true,
-    imageSrc: "/images/twelve_janggi/landing.jpg",
+    imageSrc: "/images/twelve_janggi/landing.png",
   },
   {
     slug: "coming-soon-02",
