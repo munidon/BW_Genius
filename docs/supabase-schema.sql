@@ -167,8 +167,8 @@ drop policy if exists "bw_rooms_update_member" on public.bw_rooms;
 create policy "bw_rooms_update_member"
 on public.bw_rooms
 for update
-using (auth.uid() in (host_id, guest_id))
-with check (auth.uid() in (host_id, guest_id));
+using (false)
+with check (false);
 
 -- public rounds policy
 drop policy if exists "bw_rounds_public_select_member" on public.bw_rounds_public;
