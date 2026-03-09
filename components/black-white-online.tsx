@@ -650,7 +650,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     const losses = Number(data.losses ?? 0);
     const total = wins + losses;
     const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
-    setRecord({ total, wins, losses, winRate });
+    const nextRecord = { total, wins, losses, winRate };
+    setRecord(nextRecord);
+    setProfileRecords((prev) => ({ ...prev, [uid]: nextRecord }));
   }, []);
 
   const loadProfiles = useCallback(async (ids: string[]) => {
@@ -753,20 +755,27 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       }
     }
 
+    const roomSnapshotChanged =
+      !currentRoom || currentRoom.id !== nextRoom.id || currentRoom.updated_at !== nextRoom.updated_at;
+    const currentUserId = userIdRef.current;
+    const shouldRefreshMyRecord =
+      roomSnapshotChanged && nextRoom.status === "finished" && Boolean(nextRoom.winner_id) && Boolean(currentUserId);
+
     emptyRoomReadCountRef.current = 0;
     roomRef.current = nextRoom;
     setRoom(nextRoom);
-    await loadProfiles([nextRoom.host_id, nextRoom.guest_id ?? ""]);
     if (nextRoom.status !== "finished") {
       setRevealedRows([]);
       setRevealsLoadedForRoomId(null);
     }
     await Promise.all([
+      loadProfiles([nextRoom.host_id, nextRoom.guest_id ?? ""]),
       loadRounds(nextRoom.id),
       loadMySubmissions(nextRoom.id),
       nextRoom.status === "finished" ? loadFinishedRoundReveals(nextRoom.id) : Promise.resolve(),
+      shouldRefreshMyRecord && currentUserId ? loadMyRecord(currentUserId) : Promise.resolve(),
     ]);
-  }, [loadFinishedRoundReveals, loadMySubmissions, loadProfiles, loadRounds]);
+  }, [loadFinishedRoundReveals, loadMyRecord, loadMySubmissions, loadProfiles, loadRounds]);
 
   const loadLatestRoom = useCallback(async (uid: string, authSyncSeq?: number) => {
     if (!supabase) return;
@@ -1209,6 +1218,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     if (leaveError) {
       const normalizedError = leaveError.message.trim().toUpperCase();
       if (normalizedError.includes("ROOM_NOT_FOUND")) {
+        if (isPlaying) {
+          await loadMyRecord(userId);
+        }
         setLeaveConfirmOpen(false);
         clearRoomScopedState();
         playSfx("leave");
@@ -1225,6 +1237,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       return;
     }
 
+    if (isPlaying) {
+      await loadMyRecord(userId);
+    }
     setLeaveConfirmOpen(false);
     clearRoomScopedState();
     playSfx("leave");

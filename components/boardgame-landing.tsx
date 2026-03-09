@@ -67,7 +67,7 @@ export function BoardgameLanding() {
         <header className="rounded-[2rem] border border-white/10 bg-black/35 p-5 backdrop-blur-xl md:p-7">
           <div className="flex flex-col gap-6">
             <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-              <div className="max-w-2xl text-center md:text-left">
+              <div className="landing-hero-copy max-w-2xl">
                 <p className="text-xs font-bold uppercase tracking-[0.45em] text-amber-100/75">BoardHub</p>
                 <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">
                   한 곳에서 고르고,
@@ -76,7 +76,7 @@ export function BoardgameLanding() {
                   <br />
                   보드게임 허브
                 </h1>
-                <p className="mt-4 max-w-xl text-sm leading-6 text-red-50/70 md:text-base">
+                <p className="landing-hero-description mt-4 max-w-xl text-sm leading-6 text-red-50/70 md:text-base">
                   로그인하고, 원하는 게임을 선택하면
                   <br />
                   해당 보드게임을 바로 즐기실 수 있습니다!

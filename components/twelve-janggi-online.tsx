@@ -115,6 +115,11 @@ interface PlayerRecord {
   winRate: number;
 }
 
+interface RuleGuideCard {
+  title: string;
+  lines: string[];
+}
+
 const ROOM_SELECT = [
   "id",
   "room_code",
@@ -168,6 +173,35 @@ const EMPTY_RECORD: PlayerRecord = {
   losses: 0,
   winRate: 0,
 };
+
+const TWELVE_JANGGI_RULE_CARDS: RuleGuideCard[] = [
+  {
+    title: "판과 배치",
+    lines: [
+      "3열 x 4행, 총 12칸",
+      "내 진영은 항상 아래쪽으로 표시",
+      "CEO/부장/대리/인턴 4개로 시작",
+    ],
+  },
+  {
+    title: "이동과 승격",
+    lines: [
+      "CEO: 전 방향 1칸",
+      "부장: 상하좌우 1칸",
+      "대리: 대각선 4방향 1칸",
+      "인턴: 전방 1칸, 상대 진영 진입 시 신입사원",
+      "신입사원: 상하좌우 및 좌상, 우상",
+    ],
+  },
+  {
+    title: "포로와 승리",
+    lines: [
+      "잡은 말은 다음 턴부터 내 포로로 사용",
+      "포로는 상대 진영에 내려놓을 수 없음",
+      "CEO 포획 또는 CEO 침투 버티기 성공 시 승리",
+    ],
+  },
+];
 
 function makeRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -435,7 +469,9 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
       .eq("user_id", uid)
       .maybeSingle();
 
-    setRecord(buildRecord(data?.wins, data?.losses));
+    const nextRecord = buildRecord(data?.wins, data?.losses);
+    setRecord(nextRecord);
+    setProfileRecords((previous) => ({ ...previous, [uid]: nextRecord }));
   }, []);
 
   const handleRoomSync = useCallback(async (nextRoomRow: TjRoomRow) => {
@@ -456,14 +492,21 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
       setSelectedHandCode(null);
     }
 
+    const roomSnapshotChanged =
+      !currentRoom || currentRoom.id !== nextRoom.id || currentRoom.updated_at !== nextRoom.updated_at;
+    const currentUserId = userIdRef.current;
+    const shouldRefreshMyRecord =
+      roomSnapshotChanged && nextRoom.status === "finished" && Boolean(nextRoom.winner_id) && Boolean(currentUserId);
+
     roomRef.current = nextRoom;
     setRoom(nextRoom);
 
     await Promise.all([
       loadStats([nextRoom.host_id, nextRoom.guest_id ?? ""]),
       loadMoveLogs(nextRoom.id),
+      shouldRefreshMyRecord && currentUserId ? loadMyRecord(currentUserId) : Promise.resolve(),
     ]);
-  }, [loadMoveLogs, loadStats]);
+  }, [loadMoveLogs, loadMyRecord, loadStats]);
 
   const loadLatestRoom = useCallback(async (uid: string) => {
     if (!supabase) return;
@@ -927,7 +970,9 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
   };
 
   const leaveRoom = async () => {
-    if (!supabase || !room) return;
+    if (!supabase || !room || !userId) return;
+
+    const isPlaying = room.status === "playing";
 
     setLoading(true);
     setError("");
@@ -939,6 +984,9 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
     if (leaveError) {
       const formatted = formatTjError(leaveError.message, leaveError.code);
       if (formatted === "방을 찾을 수 없습니다.") {
+        if (isPlaying) {
+          await loadMyRecord(userId);
+        }
         clearRoomScopedState();
         setNotice("방에서 나갔습니다.");
         setLoading(false);
@@ -950,8 +998,11 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
       return;
     }
 
+    if (isPlaying) {
+      await loadMyRecord(userId);
+    }
     clearRoomScopedState();
-    setNotice(room.status === "playing" ? "게임에서 나가 기권 처리되었습니다." : "방에서 나갔습니다.");
+    setNotice(isPlaying ? "게임에서 나가 기권 처리되었습니다." : "방에서 나갔습니다.");
     setLoading(false);
   };
 
@@ -1184,6 +1235,15 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
               </div>
             </div>
           </section>
+        )}
+
+        {!inRoom && (
+          <TwelveJanggiRulesPanel
+            variant="lobby"
+            eyebrow="Game Guide"
+            title="게임 규칙 안내"
+            subtitle="Room Lobby에서 바로 핵심 규칙을 확인할 수 있습니다."
+          />
         )}
 
         {room && (
@@ -1492,37 +1552,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
               </section>
 
               <section className="rounded-[1.75rem] border border-emerald-200/10 bg-[#071611]/75 p-5 backdrop-blur-xl">
-                <p className="text-xs font-bold uppercase tracking-[0.35em] text-lime-100/70">Rules Snapshot</p>
-                <h3 className="mt-2 text-xl font-black text-white">핵심 규칙</h3>
-                <div className="mt-4 grid gap-3">
-                  <RuleCard
-                    title="판과 배치"
-                    lines={[
-                      "3열 x 4행, 총 12칸",
-                      "내 진영은 항상 아래쪽으로 표시",
-                      "CEO/부장/대리/인턴 4개로 시작",
-                    ]}
-                  />
-                  <RuleCard
-                    title="이동과 승격"
-                    lines={[
-                      "CEO: 전 방향 1칸",
-                      "부장: 상하좌우 1칸",
-                      "대리: 대각선 4방향 1칸",
-                      "인턴: 전방 1칸, 상대 진영 진입 시 신입사원",
-                      "신입사원: 상하좌우 및 좌상, 우상"
-                    ]}
-                  />
-                  <RuleCard
-                    title="포로와 승리"
-                    lines={[
-                      "잡은 말은 다음 턴부터 내 포로로 사용",
-                      "포로는 상대 진영에 내려놓을 수 없음",
-                      "CEO 포획 또는 CEO 침투 버티기 성공 시 승리",
-                    ]}
-                  />
-                </div>
-
+                <TwelveJanggiRulesPanel variant="sidebar" eyebrow="Rules Snapshot" title="핵심 규칙" />
               </section>
 
 
@@ -1722,6 +1752,39 @@ function RuleCard({ title, lines }: { title: string; lines: string[] }) {
           <p key={line} className="text-sm text-emerald-50/75">
             {line}
           </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TwelveJanggiRulesPanel({
+  variant,
+  eyebrow,
+  title,
+  subtitle,
+}: {
+  variant: "lobby" | "sidebar";
+  eyebrow: string;
+  title: string;
+  subtitle?: string;
+}) {
+  const isLobby = variant === "lobby";
+
+  return (
+    <div
+      className={`${isLobby ? "mb-4 rounded-[1.75rem] border border-emerald-200/10 bg-[#071611]/70 p-5 backdrop-blur-xl" : ""}`}
+    >
+      <div className={`${isLobby ? "mb-4 flex flex-wrap items-center justify-between gap-3" : ""}`}>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.35em] text-lime-100/70">{eyebrow}</p>
+          <h3 className="mt-2 text-xl font-black text-white">{title}</h3>
+        </div>
+        {subtitle && <p className="text-sm text-emerald-50/70">{subtitle}</p>}
+      </div>
+      <div className={`grid gap-3 ${isLobby ? "md:grid-cols-2 xl:grid-cols-3" : ""}`}>
+        {TWELVE_JANGGI_RULE_CARDS.map((card) => (
+          <RuleCard key={card.title} title={card.title} lines={card.lines} />
         ))}
       </div>
     </div>

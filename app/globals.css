@@ -33,3 +33,21 @@ body::before {
     radial-gradient(circle at 70% 65%, rgba(255, 255, 255, 0.05) 0, transparent 30%);
   mix-blend-mode: soft-light;
 }
+
+.landing-hero-copy {
+  text-align: center;
+}
+
+.landing-hero-description {
+  margin-inline: auto;
+}
+
+@media (min-width: 768px) and (min-aspect-ratio: 11/10) {
+  .landing-hero-copy {
+    text-align: left;
+  }
+
+  .landing-hero-description {
+    margin-inline: 0;
+  }
+}

@@ -472,6 +472,7 @@ declare
   v_next_lead uuid;
   v_next_follow uuid;
   v_is_host boolean;
+  v_loser_id uuid;
 begin
   if auth.uid() is null then
     raise exception 'AUTH_REQUIRED';
@@ -603,6 +604,24 @@ begin
         end
     where id = p_room_id
     returning * into v_room;
+
+    if v_room.winner_id is not null then
+      v_loser_id := case
+        when v_room.winner_id = v_room.host_id then v_room.guest_id
+        when v_room.winner_id = v_room.guest_id then v_room.host_id
+        else null
+      end;
+
+      update public.bw_profiles
+      set wins = wins + 1
+      where id = v_room.winner_id;
+
+      if v_loser_id is not null then
+        update public.bw_profiles
+        set losses = losses + 1
+        where id = v_loser_id;
+      end if;
+    end if;
 
     return v_room;
   end if;
