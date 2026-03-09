@@ -3,7 +3,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
-import { AdsenseBanner } from "@/components/adsense-banner";
 import { StarterCoinOverlay, STARTER_COIN_OVERLAY_DURATION_MS } from "@/components/starter-coin-overlay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
@@ -210,6 +209,10 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
 
   const inRoom = Boolean(room);
   const desiredBgmTrack: BgmTrack = room ? (room.status === "playing" ? "playing" : "waiting") : "lobby";
+  const roomId = room?.id ?? null;
+  const roomStatus = room?.status ?? null;
+  const roomWinnerId = room?.winner_id ?? null;
+  const roomFinished = roomStatus === "finished";
 
   useEffect(() => {
     userIdRef.current = userId;
@@ -629,7 +632,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     }
   }, []);
 
-  const loadMyRecord = async (uid: string, authSyncSeq?: number) => {
+  const loadMyRecord = useCallback(async (uid: string, authSyncSeq?: number) => {
     if (!supabase) return;
     const { data, error: profileError } = await supabase
       .from("bw_profiles")
@@ -648,9 +651,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     const total = wins + losses;
     const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
     setRecord({ total, wins, losses, winRate });
-  };
+  }, []);
 
-  const loadProfiles = async (ids: string[]) => {
+  const loadProfiles = useCallback(async (ids: string[]) => {
     if (!supabase || ids.length === 0) return;
     const uniqueIds = [...new Set(ids.filter(Boolean))];
     if (uniqueIds.length === 0) return;
@@ -670,9 +673,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     });
     setProfiles((prev) => ({ ...prev, ...mapped }));
     setProfileRecords((prev) => ({ ...prev, ...recordMapped }));
-  };
+  }, []);
 
-  const loadFinishedRoundReveals = async (roomId: string) => {
+  const loadFinishedRoundReveals = useCallback(async (roomId: string) => {
     if (!supabase) return;
     const { data, error: revealError } = await supabase.rpc("bw_get_room_reveals", {
       p_room_id: roomId,
@@ -684,9 +687,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     }
     setRevealedRows(data as RoomRevealRow[]);
     setRevealsLoadedForRoomId(roomId);
-  };
+  }, []);
 
-  const loadRounds = async (roomId: string) => {
+  const loadRounds = useCallback(async (roomId: string) => {
     if (!supabase) return;
     const fetchSeq = ++latestRoundsFetchSeqRef.current;
     const isObsolete = () =>
@@ -720,9 +723,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     }
 
     if (data) setRounds(data as BwRoundPublic[]);
-  };
+  }, []);
 
-  const loadMySubmissions = async (roomId: string) => {
+  const loadMySubmissions = useCallback(async (roomId: string) => {
     const currentUserId = userIdRef.current;
     if (!supabase || !currentUserId) return;
     const fetchSeq = ++latestSubmissionsFetchSeqRef.current;
@@ -738,9 +741,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     if (userIdRef.current !== currentUserId) return;
 
     if (data) setMySubmissions(data as BwSubmission[]);
-  };
+  }, []);
 
-  const handleRoomSync = async (nextRoom: BwRoom) => {
+  const handleRoomSync = useCallback(async (nextRoom: BwRoom) => {
     const currentRoom = roomRef.current;
     if (currentRoom && currentRoom.id === nextRoom.id) {
       const currentUpdatedAt = Date.parse(currentRoom.updated_at);
@@ -763,9 +766,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       loadMySubmissions(nextRoom.id),
       nextRoom.status === "finished" ? loadFinishedRoundReveals(nextRoom.id) : Promise.resolve(),
     ]);
-  };
+  }, [loadFinishedRoundReveals, loadMySubmissions, loadProfiles, loadRounds]);
 
-  const loadLatestRoom = async (uid: string, authSyncSeq?: number) => {
+  const loadLatestRoom = useCallback(async (uid: string, authSyncSeq?: number) => {
     if (!supabase) return;
     const isObsolete = () =>
       uid !== userIdRef.current || (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current);
@@ -829,7 +832,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     }
 
     clearRoomScopedState();
-  };
+  }, [clearRoomScopedState, handleRoomSync]);
 
   useEffect(() => {
     if (!supabase) {
@@ -868,6 +871,8 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     userId,
     clearAuthScopedState,
     clearSupabasePersistedSession,
+    loadLatestRoom,
+    loadMyRecord,
     stripAuthCallbackParams,
   ]);
 
@@ -883,17 +888,17 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
   }, []);
 
   useEffect(() => {
-    if (!supabase || !room) return;
+    if (!supabase || !roomId) return;
     const client = supabase;
     setRealtimeSubscribed(false);
     const uid = userId;
     if (!uid) return;
 
     const channel = client
-      .channel(`bw-room-${room.id}`)
+      .channel(`bw-room-${roomId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "bw_rooms", filter: `id=eq.${room.id}` },
+        { event: "*", schema: "public", table: "bw_rooms", filter: `id=eq.${roomId}` },
         async (payload) => {
           const next = payload.new as BwRoom | null;
           if (next?.id) {
@@ -905,16 +910,16 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "bw_rounds_public", filter: `room_id=eq.${room.id}` },
+        { event: "*", schema: "public", table: "bw_rounds_public", filter: `room_id=eq.${roomId}` },
         async () => {
-          await Promise.all([loadRounds(room.id), loadLatestRoom(uid)]);
+          await Promise.all([loadRounds(roomId), loadLatestRoom(uid)]);
         }
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "bw_submissions", filter: `room_id=eq.${room.id}` },
+        { event: "*", schema: "public", table: "bw_submissions", filter: `room_id=eq.${roomId}` },
         async () => {
-          await Promise.all([loadMySubmissions(room.id), loadRounds(room.id), loadLatestRoom(uid)]);
+          await Promise.all([loadMySubmissions(roomId), loadRounds(roomId), loadLatestRoom(uid)]);
         }
       )
       .subscribe((status) => {
@@ -928,20 +933,20 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       setRealtimeSubscribed(false);
       client.removeChannel(channel);
     };
-  }, [room?.id, userId]);
+  }, [handleRoomSync, loadLatestRoom, loadMySubmissions, loadRounds, roomId, userId]);
 
   useEffect(() => {
-    if (!room || room.status !== "playing") return;
+    if (!roomId || roomStatus !== "playing") return;
     const uid = userIdRef.current;
 
-    void Promise.all([loadRounds(room.id), uid ? loadLatestRoom(uid) : Promise.resolve()]);
+    void Promise.all([loadRounds(roomId), uid ? loadLatestRoom(uid) : Promise.resolve()]);
     const refreshIntervalMs = isPageVisible ? 800 : 2000;
     const t = setInterval(() => {
-      void Promise.all([loadRounds(room.id), uid ? loadLatestRoom(uid) : Promise.resolve()]);
+      void Promise.all([loadRounds(roomId), uid ? loadLatestRoom(uid) : Promise.resolve()]);
     }, refreshIntervalMs);
 
     return () => clearInterval(t);
-  }, [room?.id, room?.status, isPageVisible]);
+  }, [isPageVisible, loadLatestRoom, loadRounds, roomId, roomStatus]);
 
   useEffect(() => {
     if (!room) return;
@@ -964,9 +969,9 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
   }, [room, userId, lastRoomSnapshot, finishedByForfeit]);
 
   useEffect(() => {
-    if (!userId || !room) return;
-    const waitingRoom = room.status === "waiting";
-    const finishedRoom = room.status === "finished";
+    if (!userId || !roomId || !roomStatus) return;
+    const waitingRoom = roomStatus === "waiting";
+    const finishedRoom = roomStatus === "finished";
     if (!waitingRoom && !finishedRoom && realtimeSubscribed && isPageVisible) return;
 
     loadLatestRoom(userId);
@@ -979,10 +984,10 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     }, refreshIntervalMs);
 
     return () => clearInterval(t);
-  }, [userId, room?.id, room?.status, room?.guest_id, realtimeSubscribed, isPageVisible]);
+  }, [isPageVisible, loadLatestRoom, loadMyRecord, realtimeSubscribed, roomId, roomStatus, userId]);
 
   useEffect(() => {
-    if (!room || room.status !== "finished") {
+    if (!roomFinished) {
       setShowVerdict(false);
       return;
     }
@@ -993,7 +998,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     }, 2600);
 
     return () => clearTimeout(t);
-  }, [room?.status, room?.winner_id]);
+  }, [roomFinished, roomWinnerId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1285,13 +1290,6 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
             </div>
           </div>
         </header>
-
-        <AdsenseBanner
-          className="mb-4 border-red-200/10 bg-[#170505]/45"
-          labelClassName="text-red-100/45"
-          description="흑과 백 상단 광고 영역"
-          title="Sponsored"
-        />
 
         {error && <div className="mb-4 rounded-xl border border-red-400/30 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
         <AnimatePresence>

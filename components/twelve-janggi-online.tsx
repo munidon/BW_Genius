@@ -3,7 +3,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
-import { AdsenseBanner } from "@/components/adsense-banner";
 import { StarterCoinOverlay, STARTER_COIN_OVERLAY_DURATION_MS, type StarterRole } from "@/components/starter-coin-overlay";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
@@ -714,6 +713,8 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
   const needsDefenseAgainstTry = Boolean(room && myOwner && room.pending_try_owner === getTjOpponent(myOwner));
   const tryOwnerName = room?.pending_try_owner === "host" ? hostName : room?.pending_try_owner === "guest" ? guestName : "";
   const winnerName = room?.winner_id === room?.host_id ? hostName : room?.winner_id === room?.guest_id ? guestName : "";
+  const roomFinished = room?.status === "finished";
+  const roomWinnerId = room?.winner_id ?? null;
   const boardRows = Array.from({ length: 4 }, (_, rowIndex) =>
     Array.from({ length: 3 }, (_, colIndex) => rowIndex * 3 + colIndex)
   );
@@ -744,7 +745,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
   }, [finishedByForfeit, lastRoomSnapshot, room, userId]);
 
   useEffect(() => {
-    if (!room || room.status !== "finished") {
+    if (!roomFinished) {
       setShowVerdict(false);
       return;
     }
@@ -755,7 +756,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
     }, 2600);
 
     return () => clearTimeout(timer);
-  }, [room?.status, room?.winner_id]);
+  }, [roomFinished, roomWinnerId]);
 
   const createRoom = async () => {
     if (!supabase) return;
@@ -1051,13 +1052,6 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
             </div>
           </div>
         </header>
-
-        <AdsenseBanner
-          className="mb-4 border-emerald-200/10 bg-[#051712]/45"
-          labelClassName="text-emerald-50/45"
-          description="십이장기 상단 광고 영역"
-          title="Sponsored"
-        />
 
         {error && (
           <div className="mb-4 rounded-2xl border border-rose-300/20 bg-rose-950/30 p-4 text-sm text-rose-100">
@@ -1380,10 +1374,10 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                   onSelect={() => { }}
                 />
 
-                <div className="mt-4 rounded-[1.6rem] border border-emerald-200/10 bg-[radial-gradient(circle_at_top,rgba(187,247,208,0.08),transparent_42%),linear-gradient(180deg,rgba(8,27,21,0.92),rgba(5,18,14,0.96))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-                  <div className="grid gap-2">
+                <div className="mt-4 rounded-[1.6rem] border border-emerald-200/10 bg-[radial-gradient(circle_at_top,rgba(187,247,208,0.08),transparent_42%),linear-gradient(180deg,rgba(8,27,21,0.92),rgba(5,18,14,0.96))] p-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] sm:p-4">
+                  <div className="grid gap-1.5 sm:gap-2">
                     {boardRows.map((row) => (
-                      <div key={`board-row-${row[0]}`} className="grid grid-cols-3 gap-2">
+                      <div key={`board-row-${row[0]}`} className="grid grid-cols-3 gap-1.5 sm:gap-2">
                         {row.map((viewCell) => {
                           const canonicalCell = toTjCanonicalCell(viewCell, perspective);
                           const piece = decodeTjPieceCode(board[canonicalCell]);
@@ -1406,7 +1400,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                               disabled={!interactive}
                               whileHover={interactive ? { y: -2 } : undefined}
                               whileTap={interactive ? { scale: 0.98 } : undefined}
-                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-10 text-left transition ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
+                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-2.5 text-left transition sm:p-4 md:p-10 ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
                                 } ${isSelectedCell
                                   ? "border-white/80 ring-2 ring-white shadow-[0_0_0_1px_rgba(255,255,255,0.4)]"
                                   : isMoveTarget || isDropTarget
@@ -1582,12 +1576,12 @@ function PieceToken({
 
   return (
     <div
-      className={`relative flex h-full w-full flex-col items-center justify-center rounded-[0.95rem] border px-4 py-5 shadow-lg ${mine
+      className={`relative flex h-full w-full flex-col items-center justify-center rounded-[0.95rem] border px-2 py-2.5 shadow-lg sm:px-4 sm:py-5 ${mine
         ? "border-lime-200/60 bg-gradient-to-br from-lime-100 to-emerald-100 text-[#163423]"
         : "border-emerald-300/30 bg-gradient-to-br from-[#143228] to-[#091912] text-emerald-50"
         } ${emphasized ? "scale-[1.02] shadow-[0_0_0_1px_rgba(255,255,255,0.55)_inset]" : ""}`}
     >
-      <span className="absolute left-2 top-2 z-10 text-[11px] font-bold uppercase tracking-[0.28em] opacity-60">
+      <span className="absolute left-1.5 top-1.5 z-10 text-[9px] font-bold uppercase tracking-[0.18em] opacity-60 sm:left-2 sm:top-2 sm:text-[11px] sm:tracking-[0.28em]">
         {piece.owner === "host" ? "H" : "G"}
       </span>
       <TjPieceAsset
@@ -1598,8 +1592,8 @@ function PieceToken({
         imageClassName={`object-contain p-0 drop-shadow-[0_10px_18px_rgba(0,0,0,0.28)] ${mine ? "" : "rotate-180"}`}
         fallback={(
           <div className="flex flex-col items-center justify-center">
-            <span className="text-3xl font-black leading-none">{pieceLabel}</span>
-            <span className="mt-1 text-[10px] font-bold uppercase tracking-[0.28em] opacity-60">
+            <span className="text-xl font-black leading-none sm:text-3xl">{pieceLabel}</span>
+            <span className="mt-1 text-[8px] font-bold uppercase tracking-[0.18em] opacity-60 sm:text-[10px] sm:tracking-[0.28em]">
               {piece.kind === "KING" ? "KING" : piece.kind === "JANG" ? "JANG" : piece.kind === "SANG" ? "SANG" : piece.kind}
             </span>
           </div>
