@@ -704,32 +704,32 @@ function getLlSeatStyle(relativeSeatIndex: number, playerCount: number): LlSeatP
   if (relativeSeatIndex === 0) {
     return {
       left: "50%",
-      top: "84%",
-      transform: "translate(-50%, -50%)",
+      top: "calc(100% - 1.75rem)",
+      transform: "translate(-50%, -100%)",
     };
   }
 
   if (playerCount === 2) {
     return {
       left: "50%",
-      top: "16%",
-      transform: "translate(-50%, -50%)",
+      top: "1.75rem",
+      transform: "translate(-50%, 0)",
     };
   }
 
   if (playerCount === 3) {
     if (relativeSeatIndex === 1) {
       return {
-        left: "22%",
-        top: "18%",
-        transform: "translate(-50%, -50%)",
+        left: "24%",
+        top: "1.75rem",
+        transform: "translate(-50%, 0)",
       };
     }
     if (relativeSeatIndex === 2) {
       return {
-        left: "78%",
-        top: "18%",
-        transform: "translate(-50%, -50%)",
+        left: "76%",
+        top: "1.75rem",
+        transform: "translate(-50%, 0)",
       };
     }
   }
@@ -737,23 +737,23 @@ function getLlSeatStyle(relativeSeatIndex: number, playerCount: number): LlSeatP
   if (playerCount === 4) {
     if (relativeSeatIndex === 1) {
       return {
-        left: "18%",
-        top: "22%",
-        transform: "translate(-50%, -50%)",
+        left: "20%",
+        top: "2.25rem",
+        transform: "translate(-50%, 0)",
       };
     }
     if (relativeSeatIndex === 2) {
       return {
         left: "50%",
-        top: "12%",
-        transform: "translate(-50%, -50%)",
+        top: "1.25rem",
+        transform: "translate(-50%, 0)",
       };
     }
     if (relativeSeatIndex === 3) {
       return {
-        left: "82%",
-        top: "22%",
-        transform: "translate(-50%, -50%)",
+        left: "80%",
+        top: "2.25rem",
+        transform: "translate(-50%, 0)",
       };
     }
   }

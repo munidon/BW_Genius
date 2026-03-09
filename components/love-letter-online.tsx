@@ -10,7 +10,6 @@ import {
   formatLoveLetterError,
   getLlCurrentHandCount,
   getLlDefaultValidTargetIds,
-  getLlPublicDiscardSum,
   getLlRoundEndReasonLabel,
   getLlSeatPlacements,
   getLlTurnNotice,
@@ -165,6 +164,7 @@ function LoveLetterCardFace({
   compact = false,
   featured = false,
   imageOnly = false,
+  bare = false,
   selected = false,
   disabled = false,
   emphasis = false,
@@ -175,17 +175,28 @@ function LoveLetterCardFace({
   compact?: boolean;
   featured?: boolean;
   imageOnly?: boolean;
+  bare?: boolean;
   selected?: boolean;
   disabled?: boolean;
   emphasis?: boolean;
   onClick?: () => void;
 }) {
   const definition = cardId !== undefined ? getLoveLetterCard(cardId) : null;
-  const className = `group relative overflow-hidden rounded-[1.6rem] border text-left transition ${compact ? featured ? "w-[118px] p-2.5" : "w-[104px] p-2" : "w-full p-3"
-    } ${hidden
+  const className = `group relative text-left transition ${bare ? "" : "overflow-hidden rounded-[1.6rem] border"} ${compact
+    ? featured
+      ? bare
+        ? "w-[132px]"
+        : "w-[118px] p-2.5"
+      : bare
+        ? "w-[108px]"
+        : "w-[104px] p-2"
+    : bare
+      ? "w-full"
+      : "w-full p-3"
+    } ${bare ? "" : hidden
       ? "border-white/10 bg-[linear-gradient(160deg,rgba(255,255,255,0.06),rgba(255,255,255,0.02))]"
       : "bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))]"
-    } ${selected
+    } ${bare ? "" : selected
       ? "border-white/90 shadow-[0_0_0_1px_rgba(255,255,255,0.55),0_0_36px_rgba(255,255,255,0.12)]"
       : emphasis
         ? "border-amber-200/60 shadow-[0_0_32px_rgba(251,191,36,0.15)]"
@@ -197,7 +208,7 @@ function LoveLetterCardFace({
     <>
       {!imageOnly && <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${definition.accentClassName}`} />}
       <div
-        className={`relative overflow-hidden rounded-[1.2rem] border border-white/10 bg-black/35 ${compact
+        className={`relative overflow-hidden ${bare ? "" : "rounded-[1.2rem] border border-white/10 bg-black/35"} ${compact
           ? featured
             ? "h-28"
             : "h-24"
@@ -210,7 +221,7 @@ function LoveLetterCardFace({
           src={definition.imageSrc}
           alt={definition.name}
           fill
-          className="object-contain p-2 transition duration-300 group-hover:scale-[1.03]"
+          className={`object-contain transition duration-300 group-hover:scale-[1.03] ${bare ? "" : "p-2"}`}
         />
         {!imageOnly && (
           <>
@@ -242,23 +253,19 @@ function LoveLetterCardFace({
     </>
   ) : (
     <div
-      className={`flex h-full min-h-[160px] flex-col justify-between rounded-[1.25rem] border border-white/10 bg-[#211019]/70 p-4 ${compact
+      className={`relative overflow-hidden rounded-[1.2rem] border border-white/10 bg-black/35 ${compact
         ? featured
-          ? "min-h-[148px]"
-          : "min-h-[118px]"
-        : imageOnly
-          ? "min-h-[280px]"
-          : ""
+          ? "h-28"
+          : "h-24"
+        : "aspect-[3/4]"
         }`}
     >
-      <div>
-        <p className="text-[11px] font-bold uppercase tracking-[0.4em] text-[#f8e7e2]/55">Secret</p>
-        <p className="mt-3 text-xl font-black text-white">비공개 손패</p>
-        <p className="mt-2 text-sm leading-5 text-white/65">관전자 모드나 결과 공개 전까지 카드 내용은 숨겨집니다.</p>
-      </div>
-      <div className="mt-4 rounded-[1rem] border border-dashed border-white/15 bg-white/5 px-3 py-2 text-xs font-bold uppercase tracking-[0.3em] text-white/45">
-        face down
-      </div>
+      <Image
+        src="/images/love_letters/facedown_card.png"
+        alt="숨겨진 카드"
+        fill
+        className="object-contain"
+      />
     </div>
   );
 
@@ -332,7 +339,6 @@ function ActionLogPanel({ logs }: { logs: LlRoomView["logs"] }) {
 
 function PlayerSeatCard({
   player,
-  isSelf,
   isHost,
   isTurnPlayer,
   isStarter,
@@ -340,7 +346,6 @@ function PlayerSeatCard({
   isEliminated,
   isRoundWinner,
   isMatchWinner,
-  tokenGoal,
   handCount,
   showBoardHand,
   visibleHand,
@@ -350,7 +355,6 @@ function PlayerSeatCard({
   onSelect,
 }: {
   player: LlRoomPlayerRow;
-  isSelf: boolean;
   isHost: boolean;
   isTurnPlayer: boolean;
   isStarter: boolean;
@@ -358,7 +362,6 @@ function PlayerSeatCard({
   isEliminated: boolean;
   isRoundWinner: boolean;
   isMatchWinner: boolean;
-  tokenGoal: number;
   handCount: number;
   showBoardHand: boolean;
   visibleHand: LlCardId[];
@@ -382,63 +385,32 @@ function PlayerSeatCard({
 
   const cardBody = (
     <>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-black uppercase tracking-[0.25em] text-white/70">
-              {isHost ? "HOST" : `P${player.seat_index + 1}`}
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-black uppercase tracking-[0.25em] text-white/70">
+            {isHost ? "HOST" : `P${player.seat_index + 1}`}
+          </span>
+          {isStarter && (
+            <span className="rounded-full border border-amber-200/30 bg-amber-300/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.25em] text-amber-100">
+              선 플레이어
             </span>
-            {isStarter && (
-              <span className="rounded-full border border-amber-200/30 bg-amber-300/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.25em] text-amber-100">
-                선 플레이어
-              </span>
-            )}
-            {isTurnPlayer && (
-              <span className="rounded-full border border-cyan-200/30 bg-cyan-300/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.25em] text-cyan-100">
-                현재 턴
-              </span>
-            )}
-          </div>
-          <p className="mt-3 truncate text-lg font-black text-white">{player.nickname_snapshot}</p>
-          <p className="mt-1 text-xs text-white/55">
-            {isEliminated ? "해당 라운드 탈락" : isProtected ? "보호 상태 유지 중" : "라운드 진행 중"}
-          </p>
+          )}
+          {isTurnPlayer && (
+            <span className="rounded-full border border-cyan-200/30 bg-cyan-300/10 px-2 py-1 text-[10px] font-black uppercase tracking-[0.25em] text-cyan-100">
+              현재 턴
+            </span>
+          )}
         </div>
-        <div className="rounded-2xl border border-white/10 bg-black/30 px-3 py-2 text-right">
-          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-white/45">Hand</p>
-          <p className="mt-1 text-lg font-black text-white">{handCount}</p>
-        </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-white/65">
-        <div className="rounded-2xl border border-white/8 bg-white/5 px-3 py-2">
-          <p className="font-bold uppercase tracking-[0.25em] text-white/40">Hand</p>
-          <p className="mt-1 text-sm font-bold text-white">{handCount}장</p>
-          <p className="text-[11px] text-white/45">{isSelf ? "보드는 비공개" : "남은 손패 수"}</p>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 px-3 py-2">
-          <p className="font-bold uppercase tracking-[0.25em] text-white/40">Public</p>
-          <p className="mt-1 text-sm font-bold text-white">{discardPile.length}장</p>
-          <p className="text-[11px] text-white/45">합 {getLlPublicDiscardSum(discardPile)}</p>
-        </div>
-        <div className="rounded-2xl border border-white/8 bg-white/5 px-3 py-2">
-          <p className="font-bold uppercase tracking-[0.25em] text-white/40">Token</p>
-          <p className="mt-1 text-sm font-bold text-white">
-            {player.token_count} / {tokenGoal}
-          </p>
-          <p className="text-[11px] text-white/45">누적 비밀 폴라로이드</p>
-        </div>
+        <p className="mt-3 truncate text-lg font-black text-white">{player.nickname_snapshot}</p>
+        <p className="mt-1 text-xs text-white/55">
+          {isEliminated ? "해당 라운드 탈락" : isProtected ? "보호 상태 유지 중" : "라운드 진행 중"}
+        </p>
       </div>
 
       {showBoardHand && (
-        <div className="mt-4 rounded-[1.35rem] border border-white/10 bg-black/20 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-white/45">Visible Hand</p>
-            <p className="text-[11px] text-white/45">
-              {visibleHand.length > 0 ? `${visibleHand.length}장 공개` : `${handCount}장 보유`}
-            </p>
-          </div>
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-2">
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-white/45">Visible Hand</p>
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
             {visibleHand.length > 0 ? (
               visibleHand.map((cardId, index) => (
                 <div key={`${player.player_id}-visible-${cardId}-${index}`} className="shrink-0">
@@ -456,32 +428,19 @@ function PlayerSeatCard({
         </div>
       )}
 
-      <div className="mt-4 rounded-[1.35rem] border border-white/10 bg-black/20 p-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-white/45">Public Cards</p>
-            <p className="mt-1 text-sm font-black text-white">{player.nickname_snapshot}</p>
+      <div className="mt-4 border-t border-white/10 pt-4">
+        <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-white/45">Public Cards</p>
+        {discardPile.length > 0 ? (
+          <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
+            {discardPile.map((cardId, index) => (
+              <div key={`${player.player_id}-public-${cardId}-${index}`} className="shrink-0">
+                <LoveLetterCardFace cardId={cardId} compact featured imageOnly bare />
+              </div>
+            ))}
           </div>
-          <div className="text-right">
-            <p className="text-sm font-black text-white">{discardPile.length}장</p>
-            <p className="text-[11px] text-white/45">합 {getLlPublicDiscardSum(discardPile)}</p>
-          </div>
-        </div>
-        <div className="mt-3">
-          {discardPile.length > 0 ? (
-            <div className="flex gap-3 overflow-x-auto pb-2">
-              {discardPile.map((cardId, index) => (
-                <div key={`${player.player_id}-public-${cardId}-${index}`} className="shrink-0">
-                  <LoveLetterCardFace cardId={cardId} compact featured />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex h-28 items-center justify-center rounded-[1.1rem] border border-dashed border-white/10 bg-white/5 text-sm text-white/45">
-              공개 카드 없음
-            </div>
-          )}
-        </div>
+        ) : (
+          <p className="mt-4 text-sm text-white/35">공개 카드 없음</p>
+        )}
       </div>
     </>
   );
@@ -938,6 +897,8 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
   );
   const centerNoteTitle = !view
     ? ""
+    : view.round_phase === "round_reveal"
+      ? "라운드 결과 공개"
     : view.round_phase === "await_next_round"
       ? view.round_winner_ids.length > 1
         ? "공동 라운드 승리"
@@ -949,6 +910,10 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
       : view.current_turn_player_id
         ? `${playerMap[view.current_turn_player_id]?.nickname_snapshot ?? "플레이어"} 차례`
       : "진행 상황";
+  const hideCenterNoteDetail = Boolean(
+    view &&
+    (view.round_phase === "round_reveal" || view.round_phase === "await_next_round" || view.round_phase === "match_finished")
+  );
 
   useEffect(() => {
     if (!selectedCardId) {
@@ -1312,11 +1277,14 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     setError("");
     setPrivateResult(null);
 
+    const effectiveTargetPlayerId = needsTarget ? selectedTargetId : null;
+    const effectiveGuessedCard = needsGuess ? selectedGuessId : null;
+
     const { data, error: playError } = await supabase.rpc("ll_play_card", {
       p_room_id: room.id,
       p_played_card: selectedCardId,
-      p_target_player_id: selectedTargetId,
-      p_guessed_card: selectedGuessId,
+      p_target_player_id: effectiveTargetPlayerId,
+      p_guessed_card: effectiveGuessedCard,
     });
 
     if (playError) {
@@ -1741,16 +1709,20 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                   </div>
 
                   <div className="space-y-4">
+                    <div className="rounded-[1.75rem] border border-white/10 bg-black/25 p-5 text-center backdrop-blur-xl">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-[#f7d6d5]/60">Center Note</p>
+                      <h3 className="mt-3 text-2xl font-black text-white">{centerNoteTitle}</h3>
+                      {!hideCenterNoteDetail && (
+                        <p className="mt-3 text-sm leading-6 text-white/75">{getLlTurnNotice(view, userId)}</p>
+                      )}
+                      {!hideCenterNoteDetail && view.recent_private_message && (
+                        <p className="mt-3 text-xs text-white/55">{view.recent_private_message}</p>
+                      )}
+                    </div>
+
                     <div className="rounded-[2rem] border border-white/10 bg-black/25 p-5 backdrop-blur-xl">
                       <div className="relative h-[700px] overflow-hidden rounded-[1.5rem] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_25%),linear-gradient(180deg,rgba(46,14,33,0.85),rgba(20,8,17,0.92))]">
                         <div className="absolute inset-6 rounded-[1.75rem] border border-white/10 bg-[radial-gradient(circle_at_center,rgba(255,235,215,0.06),transparent_42%),linear-gradient(180deg,rgba(18,9,17,0.15),rgba(18,9,17,0.05))]" />
-
-                        <div className="absolute left-1/2 top-1/2 z-20 w-[min(280px,66vw)] -translate-x-1/2 -translate-y-1/2 rounded-[1.6rem] border border-white/10 bg-[#1b0f19]/88 p-5 text-center shadow-[0_24px_50px_rgba(0,0,0,0.32)] backdrop-blur-xl">
-                          <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-[#f7d6d5]/60">Center Note</p>
-                          <h3 className="mt-3 text-2xl font-black text-white">{centerNoteTitle}</h3>
-                          <p className="mt-3 text-sm leading-6 text-white/75">{getLlTurnNotice(view, userId)}</p>
-                          {view.recent_private_message && <p className="mt-3 text-xs text-white/55">{view.recent_private_message}</p>}
-                        </div>
 
                         {seatPlacements.map((placement) => {
                           const player = playerMap[placement.playerId];
@@ -1774,7 +1746,6 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                             >
                               <PlayerSeatCard
                                 player={player}
-                                isSelf={isSelf}
                                 isHost={room.host_id === player.player_id}
                                 isTurnPlayer={view.current_turn_player_id === player.player_id}
                                 isStarter={view.starter_player_id === player.player_id}
@@ -1782,7 +1753,6 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                                 isEliminated={eliminatedSet.has(player.player_id)}
                                 isRoundWinner={roundWinnerSet.has(player.player_id)}
                                 isMatchWinner={matchWinnerSet.has(player.player_id)}
-                                tokenGoal={tokenGoal}
                                 handCount={handCount}
                                 showBoardHand={canSeeAllHands && !isSelf}
                                 visibleHand={canSeeAllHands && !isSelf ? visibleHand : []}
