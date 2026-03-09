@@ -33,6 +33,8 @@ create table if not exists public.tj_rooms (
   guest_nickname text check (guest_nickname is null or char_length(guest_nickname) between 2 and 20),
   host_left_at timestamptz,
   guest_left_at timestamptz,
+  host_last_active_at timestamptz not null default now(),
+  guest_last_active_at timestamptz,
   guest_ready boolean not null default false,
   status text not null default 'waiting' check (status in ('waiting', 'playing', 'finished')),
   turn_owner text check (turn_owner in ('host', 'guest')),
@@ -40,6 +42,7 @@ create table if not exists public.tj_rooms (
   pending_try_owner text check (pending_try_owner in ('host', 'guest')),
   winner_id uuid references auth.users(id) on delete set null,
   winner_reason text check (winner_reason in ('capture_king', 'try', 'forfeit')),
+  last_departed_nickname text check (last_departed_nickname is null or char_length(last_departed_nickname) between 2 and 20),
   board text[] not null default public.tj_initial_board(),
   host_hand text[] not null default '{}'::text[],
   guest_hand text[] not null default '{}'::text[],
@@ -67,6 +70,20 @@ create table if not exists public.tj_move_logs (
 create index if not exists idx_tj_rooms_code on public.tj_rooms(room_code);
 create index if not exists idx_tj_rooms_updated_at on public.tj_rooms(updated_at desc);
 create index if not exists idx_tj_move_logs_room on public.tj_move_logs(room_id, move_number);
+
+alter table public.tj_rooms
+  add column if not exists host_last_active_at timestamptz not null default now(),
+  add column if not exists guest_last_active_at timestamptz,
+  add column if not exists last_departed_nickname text;
+
+update public.tj_rooms
+set host_last_active_at = coalesce(host_last_active_at, updated_at, created_at, now()),
+    guest_last_active_at = case
+      when guest_id is null then null
+      else coalesce(guest_last_active_at, updated_at, created_at, now())
+    end
+where host_last_active_at is null
+   or (guest_id is not null and guest_last_active_at is null);
 
 do $$
 begin
@@ -478,6 +495,161 @@ $$;
 revoke execute on function public.tj_upsert_stat_result(uuid, uuid) from anon, public;
 grant execute on function public.tj_upsert_stat_result(uuid, uuid) to authenticated;
 
+create or replace function public.tj_finish_by_departure(
+  p_room_id uuid,
+  p_departing_owner text,
+  p_departing_nickname text default null
+)
+returns public.tj_rooms
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_room public.tj_rooms;
+  v_after public.tj_rooms;
+  v_departing_nickname text := nullif(trim(coalesce(p_departing_nickname, '')), '');
+  v_winner_id uuid;
+  v_loser_id uuid;
+begin
+  select * into v_room
+  from public.tj_rooms
+  where id = p_room_id
+  for update;
+
+  if not found then
+    raise exception 'ROOM_NOT_FOUND';
+  end if;
+
+  if v_room.status <> 'playing' then
+    return v_room;
+  end if;
+
+  if p_departing_owner not in ('host', 'guest') then
+    raise exception 'INVALID_OWNER';
+  end if;
+
+  v_loser_id := case when p_departing_owner = 'host' then v_room.host_id else v_room.guest_id end;
+  v_winner_id := case when p_departing_owner = 'host' then v_room.guest_id else v_room.host_id end;
+
+  if v_loser_id is null then
+    raise exception 'NOT_ROOM_MEMBER';
+  end if;
+
+  if v_departing_nickname is null then
+    v_departing_nickname := case
+      when p_departing_owner = 'host' then v_room.host_nickname
+      else v_room.guest_nickname
+    end;
+  end if;
+
+  v_departing_nickname := coalesce(v_departing_nickname, '플레이어');
+
+  if p_departing_owner = 'host' then
+    update public.tj_rooms
+    set host_left_at = coalesce(v_room.host_left_at, now()),
+        guest_ready = false,
+        status = 'finished',
+        turn_owner = null,
+        pending_try_owner = null,
+        winner_id = v_room.guest_id,
+        winner_reason = 'forfeit',
+        last_departed_nickname = v_departing_nickname
+    where id = p_room_id
+    returning * into v_after;
+  else
+    update public.tj_rooms
+    set guest_left_at = coalesce(v_room.guest_left_at, now()),
+        guest_ready = false,
+        status = 'finished',
+        turn_owner = null,
+        pending_try_owner = null,
+        winner_id = v_room.host_id,
+        winner_reason = 'forfeit',
+        last_departed_nickname = v_departing_nickname
+    where id = p_room_id
+    returning * into v_after;
+  end if;
+
+  perform public.tj_upsert_stat_result(v_winner_id, v_loser_id);
+  return v_after;
+end;
+$$;
+
+revoke execute on function public.tj_finish_by_departure(uuid, text, text) from anon, public;
+
+create or replace function public.tj_heartbeat(
+  p_room_id uuid
+)
+returns public.tj_rooms
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_room public.tj_rooms;
+  v_actor_owner text;
+  v_now timestamptz := now();
+  v_timeout_cutoff timestamptz := v_now - interval '5 minutes';
+begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
+  select * into v_room
+  from public.tj_rooms
+  where id = p_room_id
+  for update;
+
+  if not found then
+    raise exception 'ROOM_NOT_FOUND';
+  end if;
+
+  if auth.uid() = v_room.host_id then
+    v_actor_owner := 'host';
+  elsif auth.uid() = v_room.guest_id then
+    v_actor_owner := 'guest';
+  else
+    raise exception 'NOT_ROOM_MEMBER';
+  end if;
+
+  if v_room.status = 'playing' then
+    if v_actor_owner = 'host'
+       and v_room.guest_id is not null
+       and v_room.guest_last_active_at is not null
+       and v_room.guest_last_active_at <= v_timeout_cutoff then
+      return public.tj_finish_by_departure(p_room_id, 'guest', null);
+    end if;
+
+    if v_actor_owner = 'guest'
+       and v_room.host_last_active_at <= v_timeout_cutoff then
+      return public.tj_finish_by_departure(p_room_id, 'host', null);
+    end if;
+  end if;
+
+  if v_room.status = 'finished' then
+    return v_room;
+  end if;
+
+  if v_actor_owner = 'host' then
+    update public.tj_rooms
+    set host_last_active_at = v_now
+    where id = p_room_id
+    returning * into v_room;
+  else
+    update public.tj_rooms
+    set guest_last_active_at = v_now
+    where id = p_room_id
+    returning * into v_room;
+  end if;
+
+  return v_room;
+end;
+$$;
+
+revoke execute on function public.tj_heartbeat(uuid) from anon, public;
+grant execute on function public.tj_heartbeat(uuid) to authenticated;
+
 create or replace function public.tj_create_room(
   p_room_code text,
   p_nickname text
@@ -503,8 +675,8 @@ begin
     raise exception 'NICKNAME_REQUIRED';
   end if;
 
-  insert into public.tj_rooms(room_code, host_id, host_nickname)
-  values (upper(trim(p_room_code)), auth.uid(), v_nickname)
+  insert into public.tj_rooms(room_code, host_id, host_nickname, host_last_active_at, guest_last_active_at, last_departed_nickname)
+  values (upper(trim(p_room_code)), auth.uid(), v_nickname, now(), null, null)
   returning * into v_room;
 
   return v_room;
@@ -550,7 +722,8 @@ begin
 
   if v_room.host_id = auth.uid() then
     update public.tj_rooms
-    set host_nickname = v_nickname
+    set host_nickname = v_nickname,
+        host_last_active_at = now()
     where id = v_room.id
     returning * into v_room;
     return v_room;
@@ -564,7 +737,9 @@ begin
   set guest_id = auth.uid(),
       guest_nickname = v_nickname,
       guest_ready = false,
-      guest_left_at = null
+      guest_left_at = null,
+      guest_last_active_at = now(),
+      last_departed_nickname = null
   where id = v_room.id
   returning * into v_room;
 
@@ -609,7 +784,8 @@ begin
   end if;
 
   update public.tj_rooms
-  set guest_ready = p_ready
+  set guest_ready = p_ready,
+      guest_last_active_at = now()
   where id = p_room_id
   returning * into v_room;
 
@@ -673,6 +849,9 @@ begin
       pending_try_owner = null,
       winner_id = null,
       winner_reason = null,
+      host_last_active_at = now(),
+      guest_last_active_at = now(),
+      last_departed_nickname = null,
       board = public.tj_initial_board(),
       host_hand = '{}'::text[],
       guest_hand = '{}'::text[],
@@ -751,6 +930,18 @@ begin
     v_actor_owner := 'guest';
   else
     raise exception 'NOT_ROOM_MEMBER';
+  end if;
+
+  if v_actor_owner = 'host'
+     and v_room.guest_id is not null
+     and v_room.guest_last_active_at is not null
+     and v_room.guest_last_active_at <= now() - interval '5 minutes' then
+    return public.tj_finish_by_departure(p_room_id, 'guest', null);
+  end if;
+
+  if v_actor_owner = 'guest'
+     and v_room.host_last_active_at <= now() - interval '5 minutes' then
+    return public.tj_finish_by_departure(p_room_id, 'host', null);
   end if;
 
   if v_room.turn_owner is distinct from v_actor_owner then
@@ -835,6 +1026,9 @@ begin
         pending_try_owner = null,
         winner_id = v_winner_id,
         winner_reason = 'capture_king',
+        host_last_active_at = case when v_actor_owner = 'host' then now() else v_room.host_last_active_at end,
+        guest_last_active_at = case when v_actor_owner = 'guest' then now() else v_room.guest_last_active_at end,
+        last_departed_nickname = null,
         move_count = v_move_number
     where id = p_room_id
     returning * into v_room;
@@ -861,6 +1055,9 @@ begin
         pending_try_owner = null,
         winner_id = v_winner_id,
         winner_reason = 'try',
+        host_last_active_at = case when v_actor_owner = 'host' then now() else v_room.host_last_active_at end,
+        guest_last_active_at = case when v_actor_owner = 'guest' then now() else v_room.guest_last_active_at end,
+        last_departed_nickname = null,
         move_count = v_move_number
     where id = p_room_id
     returning * into v_room;
@@ -878,6 +1075,8 @@ begin
         when v_final_kind = 'KING' and public.tj_is_opponent_camp(v_actor_owner, p_to_cell) then v_actor_owner
         else null
       end,
+      host_last_active_at = case when v_actor_owner = 'host' then now() else v_room.host_last_active_at end,
+      guest_last_active_at = case when v_actor_owner = 'guest' then now() else v_room.guest_last_active_at end,
       move_count = v_move_number
   where id = p_room_id
   returning * into v_room;
@@ -945,6 +1144,18 @@ begin
     v_actor_owner := 'guest';
   else
     raise exception 'NOT_ROOM_MEMBER';
+  end if;
+
+  if v_actor_owner = 'host'
+     and v_room.guest_id is not null
+     and v_room.guest_last_active_at is not null
+     and v_room.guest_last_active_at <= now() - interval '5 minutes' then
+    return public.tj_finish_by_departure(p_room_id, 'guest', null);
+  end if;
+
+  if v_actor_owner = 'guest'
+     and v_room.host_last_active_at <= now() - interval '5 minutes' then
+    return public.tj_finish_by_departure(p_room_id, 'host', null);
   end if;
 
   if v_room.turn_owner is distinct from v_actor_owner then
@@ -1018,6 +1229,9 @@ begin
         pending_try_owner = null,
         winner_id = v_winner_id,
         winner_reason = 'try',
+        host_last_active_at = case when v_actor_owner = 'host' then now() else v_room.host_last_active_at end,
+        guest_last_active_at = case when v_actor_owner = 'guest' then now() else v_room.guest_last_active_at end,
+        last_departed_nickname = null,
         move_count = v_move_number
     where id = p_room_id
     returning * into v_room;
@@ -1032,6 +1246,8 @@ begin
       guest_hand = coalesce(v_room.guest_hand, '{}'::text[]),
       turn_owner = v_next_owner,
       pending_try_owner = null,
+      host_last_active_at = case when v_actor_owner = 'host' then now() else v_room.host_last_active_at end,
+      guest_last_active_at = case when v_actor_owner = 'guest' then now() else v_room.guest_last_active_at end,
       move_count = v_move_number
   where id = p_room_id
   returning * into v_room;
@@ -1085,6 +1301,9 @@ begin
       pending_try_owner = null,
       winner_id = null,
       winner_reason = null,
+      host_last_active_at = now(),
+      guest_last_active_at = case when v_room.guest_id is null then null else now() end,
+      last_departed_nickname = null,
       board = public.tj_initial_board(),
       host_hand = '{}'::text[],
       guest_hand = '{}'::text[],
@@ -1112,8 +1331,6 @@ as $$
 declare
   v_room public.tj_rooms;
   v_after public.tj_rooms;
-  v_winner_id uuid;
-  v_loser_id uuid;
 begin
   if auth.uid() is null then
     raise exception 'AUTH_REQUIRED';
@@ -1148,11 +1365,14 @@ begin
           guest_ready = false,
           host_left_at = null,
           guest_left_at = null,
+          host_last_active_at = coalesce(v_room.guest_last_active_at, now()),
+          guest_last_active_at = null,
           turn_owner = null,
           first_turn_owner = null,
           pending_try_owner = null,
           winner_id = null,
           winner_reason = null,
+          last_departed_nickname = null,
           board = public.tj_initial_board(),
           host_hand = '{}'::text[],
           guest_hand = '{}'::text[],
@@ -1160,26 +1380,14 @@ begin
       where id = p_room_id
       returning * into v_after;
     elsif v_room.status = 'playing' then
-      update public.tj_rooms
-      set host_left_at = coalesce(v_room.host_left_at, now()),
-          guest_ready = false,
-          status = 'finished',
-          turn_owner = null,
-          pending_try_owner = null,
-          winner_id = v_room.guest_id,
-          winner_reason = 'forfeit'
-      where id = p_room_id
-      returning * into v_after;
-
-      v_winner_id := v_room.guest_id;
-      v_loser_id := v_room.host_id;
-      perform public.tj_upsert_stat_result(v_winner_id, v_loser_id);
+      v_after := public.tj_finish_by_departure(p_room_id, 'host', null);
     else
       update public.tj_rooms
       set host_left_at = coalesce(v_room.host_left_at, now()),
           guest_ready = false,
           turn_owner = null,
-          pending_try_owner = null
+          pending_try_owner = null,
+          host_last_active_at = now()
       where id = p_room_id
       returning * into v_after;
     end if;
@@ -1189,30 +1397,20 @@ begin
       set guest_id = null,
           guest_nickname = null,
           guest_left_at = null,
-          guest_ready = false
+          guest_last_active_at = null,
+          guest_ready = false,
+          last_departed_nickname = null
       where id = p_room_id
       returning * into v_after;
     elsif v_room.status = 'playing' then
-      update public.tj_rooms
-      set guest_left_at = coalesce(v_room.guest_left_at, now()),
-          guest_ready = false,
-          status = 'finished',
-          turn_owner = null,
-          pending_try_owner = null,
-          winner_id = v_room.host_id,
-          winner_reason = 'forfeit'
-      where id = p_room_id
-      returning * into v_after;
-
-      v_winner_id := v_room.host_id;
-      v_loser_id := v_room.guest_id;
-      perform public.tj_upsert_stat_result(v_winner_id, v_loser_id);
+      v_after := public.tj_finish_by_departure(p_room_id, 'guest', null);
     else
       update public.tj_rooms
       set guest_left_at = coalesce(v_room.guest_left_at, now()),
           guest_ready = false,
           turn_owner = null,
-          pending_try_owner = null
+          pending_try_owner = null,
+          guest_last_active_at = now()
       where id = p_room_id
       returning * into v_after;
     end if;

@@ -18,6 +18,8 @@ create table if not exists public.bw_rooms (
   guest_id uuid references auth.users(id) on delete set null,
   host_left_at timestamptz,
   guest_left_at timestamptz,
+  host_last_active_at timestamptz not null default now(),
+  guest_last_active_at timestamptz,
   guest_ready boolean not null default false,
   status text not null default 'waiting' check (status in ('waiting', 'playing', 'finished')),
   current_round int not null default 0 check (current_round between 0 and 9),
@@ -26,6 +28,7 @@ create table if not exists public.bw_rooms (
   host_score int not null default 0 check (host_score between 0 and 9),
   guest_score int not null default 0 check (guest_score between 0 and 9),
   winner_id uuid references auth.users(id) on delete set null,
+  last_departed_nickname text check (last_departed_nickname is null or char_length(last_departed_nickname) between 2 and 20),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint bw_room_host_guest_diff check (host_id is distinct from guest_id)
@@ -68,7 +71,19 @@ alter table public.bw_profiles
 
 alter table public.bw_rooms
   add column if not exists host_left_at timestamptz,
-  add column if not exists guest_left_at timestamptz;
+  add column if not exists guest_left_at timestamptz,
+  add column if not exists host_last_active_at timestamptz not null default now(),
+  add column if not exists guest_last_active_at timestamptz,
+  add column if not exists last_departed_nickname text;
+
+update public.bw_rooms
+set host_last_active_at = coalesce(host_last_active_at, updated_at, created_at, now()),
+    guest_last_active_at = case
+      when guest_id is null then null
+      else coalesce(guest_last_active_at, updated_at, created_at, now())
+    end
+where host_last_active_at is null
+   or (guest_id is not null and guest_last_active_at is null);
 
 create index if not exists idx_bw_rooms_code on public.bw_rooms(room_code);
 create index if not exists idx_bw_rounds_public_room on public.bw_rounds_public(room_id, round_number);
@@ -251,6 +266,164 @@ begin
 end;
 $$;
 
+create or replace function public.bw_finish_by_departure(
+  p_room_id uuid,
+  p_departing_player_id uuid,
+  p_departing_nickname text default null
+)
+returns public.bw_rooms
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_room public.bw_rooms;
+  v_after public.bw_rooms;
+  v_departing_nickname text := nullif(trim(coalesce(p_departing_nickname, '')), '');
+  v_winner_id uuid;
+begin
+  select * into v_room
+  from public.bw_rooms
+  where id = p_room_id
+  for update;
+
+  if not found then
+    raise exception 'ROOM_NOT_FOUND';
+  end if;
+
+  if v_room.status <> 'playing' then
+    return v_room;
+  end if;
+
+  if p_departing_player_id is distinct from v_room.host_id
+     and p_departing_player_id is distinct from v_room.guest_id then
+    raise exception 'NOT_ROOM_MEMBER';
+  end if;
+
+  if v_departing_nickname is null then
+    select p.nickname into v_departing_nickname
+    from public.bw_profiles p
+    where p.id = p_departing_player_id;
+  end if;
+
+  v_departing_nickname := coalesce(v_departing_nickname, '플레이어');
+
+  if p_departing_player_id = v_room.host_id then
+    v_winner_id := v_room.guest_id;
+
+    update public.bw_rooms
+    set host_left_at = coalesce(v_room.host_left_at, now()),
+        guest_ready = false,
+        status = 'finished',
+        round_phase = 'finished',
+        lead_player_id = null,
+        guest_score = least(greatest(v_room.guest_score, v_room.host_score + 1), 9),
+        winner_id = v_room.guest_id,
+        last_departed_nickname = v_departing_nickname
+    where id = p_room_id
+    returning * into v_after;
+  else
+    v_winner_id := v_room.host_id;
+
+    update public.bw_rooms
+    set guest_left_at = coalesce(v_room.guest_left_at, now()),
+        guest_ready = false,
+        status = 'finished',
+        round_phase = 'finished',
+        lead_player_id = null,
+        host_score = least(greatest(v_room.host_score, v_room.guest_score + 1), 9),
+        winner_id = v_room.host_id,
+        last_departed_nickname = v_departing_nickname
+    where id = p_room_id
+    returning * into v_after;
+  end if;
+
+  if v_winner_id is not null then
+    update public.bw_profiles
+    set wins = wins + 1
+    where id = v_winner_id;
+
+    update public.bw_profiles
+    set losses = losses + 1
+    where id = p_departing_player_id;
+  end if;
+
+  return v_after;
+end;
+$$;
+
+revoke execute on function public.bw_finish_by_departure(uuid, uuid, text) from anon, public;
+
+create or replace function public.bw_heartbeat(p_room_id uuid)
+returns public.bw_rooms
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_room public.bw_rooms;
+  v_now timestamptz := now();
+  v_timeout_cutoff timestamptz := v_now - interval '5 minutes';
+  v_is_host boolean;
+begin
+  if auth.uid() is null then
+    raise exception 'AUTH_REQUIRED';
+  end if;
+
+  select * into v_room
+  from public.bw_rooms
+  where id = p_room_id
+  for update;
+
+  if not found then
+    raise exception 'ROOM_NOT_FOUND';
+  end if;
+
+  if auth.uid() = v_room.host_id then
+    v_is_host := true;
+  elsif auth.uid() = v_room.guest_id then
+    v_is_host := false;
+  else
+    raise exception 'NOT_ROOM_MEMBER';
+  end if;
+
+  if v_room.status = 'playing' then
+    if v_is_host
+       and v_room.guest_id is not null
+       and v_room.guest_last_active_at is not null
+       and v_room.guest_last_active_at <= v_timeout_cutoff then
+      return public.bw_finish_by_departure(p_room_id, v_room.guest_id, null);
+    end if;
+
+    if not v_is_host
+       and v_room.host_last_active_at <= v_timeout_cutoff then
+      return public.bw_finish_by_departure(p_room_id, v_room.host_id, null);
+    end if;
+  end if;
+
+  if v_room.status = 'finished' then
+    return v_room;
+  end if;
+
+  if v_is_host then
+    update public.bw_rooms
+    set host_last_active_at = v_now
+    where id = p_room_id
+    returning * into v_room;
+  else
+    update public.bw_rooms
+    set guest_last_active_at = v_now
+    where id = p_room_id
+    returning * into v_room;
+  end if;
+
+  return v_room;
+end;
+$$;
+
+revoke execute on function public.bw_heartbeat(uuid) from anon, public;
+grant execute on function public.bw_heartbeat(uuid) to authenticated;
+
 create or replace function public.bw_start_game(p_room_id uuid)
 returns public.bw_rooms
 language plpgsql
@@ -306,7 +479,10 @@ begin
       lead_player_id = v_lead,
       host_score = 0,
       guest_score = 0,
-      winner_id = null
+      winner_id = null,
+      host_last_active_at = now(),
+      guest_last_active_at = now(),
+      last_departed_nickname = null
   where id = p_room_id
   returning * into v_room;
 
@@ -352,8 +528,8 @@ begin
   values (auth.uid(), trim(p_nickname))
   on conflict (id) do update set nickname = excluded.nickname;
 
-  insert into public.bw_rooms(room_code, host_id, host_left_at, guest_left_at)
-  values (upper(trim(p_room_code)), auth.uid(), null, null)
+  insert into public.bw_rooms(room_code, host_id, host_left_at, guest_left_at, host_last_active_at, guest_last_active_at, last_departed_nickname)
+  values (upper(trim(p_room_code)), auth.uid(), null, null, now(), null, null)
   returning * into v_room;
 
   return v_room;
@@ -404,7 +580,9 @@ begin
   update public.bw_rooms
   set guest_id = auth.uid(),
       guest_ready = false,
-      guest_left_at = null
+      guest_left_at = null,
+      guest_last_active_at = now(),
+      last_departed_nickname = null
   where id = v_room.id
   returning * into v_room;
 
@@ -446,7 +624,8 @@ begin
   end if;
 
   update public.bw_rooms
-  set guest_ready = p_ready
+  set guest_ready = p_ready,
+      guest_last_active_at = now()
   where id = p_room_id
   returning * into v_room;
 
@@ -502,6 +681,18 @@ begin
 
   v_is_host := (auth.uid() = v_room.host_id);
 
+  if v_is_host
+     and v_room.guest_id is not null
+     and v_room.guest_last_active_at is not null
+     and v_room.guest_last_active_at <= now() - interval '5 minutes' then
+    return public.bw_finish_by_departure(p_room_id, v_room.guest_id, null);
+  end if;
+
+  if not v_is_host
+     and v_room.host_last_active_at <= now() - interval '5 minutes' then
+    return public.bw_finish_by_departure(p_room_id, v_room.host_id, null);
+  end if;
+
   select * into v_round
   from public.bw_rounds_public
   where room_id = p_room_id
@@ -540,7 +731,9 @@ begin
     where id = v_round.id;
 
     update public.bw_rooms
-    set round_phase = 'await_follow'
+    set round_phase = 'await_follow',
+        host_last_active_at = case when v_is_host then now() else v_room.host_last_active_at end,
+        guest_last_active_at = case when v_is_host then v_room.guest_last_active_at else now() end
     where id = p_room_id
     returning * into v_room;
 
@@ -597,11 +790,14 @@ begin
         round_phase = 'finished',
         host_score = v_room.host_score,
         guest_score = v_room.guest_score,
+        host_last_active_at = case when v_is_host then now() else v_room.host_last_active_at end,
+        guest_last_active_at = case when v_is_host then v_room.guest_last_active_at else now() end,
         winner_id = case
           when v_room.host_score > v_room.guest_score then v_room.host_id
           when v_room.guest_score > v_room.host_score then v_room.guest_id
           else null
-        end
+        end,
+        last_departed_nickname = null
     where id = p_room_id
     returning * into v_room;
 
@@ -631,7 +827,9 @@ begin
       guest_score = v_room.guest_score,
       current_round = v_room.current_round + 1,
       lead_player_id = v_next_lead,
-      round_phase = 'await_lead'
+      round_phase = 'await_lead',
+      host_last_active_at = case when v_is_host then now() else v_room.host_last_active_at end,
+      guest_last_active_at = case when v_is_host then v_room.guest_last_active_at else now() end
   where id = p_room_id
   returning * into v_room;
 
@@ -680,12 +878,15 @@ begin
       guest_ready = false,
       host_left_at = null,
       guest_left_at = null,
+      host_last_active_at = now(),
+      guest_last_active_at = case when v_room.guest_id is null then null else now() end,
       current_round = 0,
       round_phase = 'idle',
       lead_player_id = null,
       host_score = 0,
       guest_score = 0,
-      winner_id = null
+      winner_id = null,
+      last_departed_nickname = null
   where id = p_room_id
   returning * into v_room;
 
@@ -705,7 +906,6 @@ as $$
 declare
   v_room public.bw_rooms;
   v_after public.bw_rooms;
-  v_loser_id uuid;
 begin
   if auth.uid() is null then
     raise exception 'AUTH_REQUIRED';
@@ -737,25 +937,20 @@ begin
           guest_id = null,
           host_left_at = v_room.guest_left_at,
           guest_left_at = null,
-          guest_ready = false
+          host_last_active_at = coalesce(v_room.guest_last_active_at, now()),
+          guest_last_active_at = null,
+          guest_ready = false,
+          last_departed_nickname = null
       where id = p_room_id
       returning * into v_after;
     elsif v_room.status = 'playing' then
-      update public.bw_rooms
-      set host_left_at = coalesce(v_room.host_left_at, now()),
-          guest_ready = false,
-          status = 'finished',
-          round_phase = 'finished',
-          lead_player_id = null,
-          guest_score = least(greatest(v_room.guest_score, v_room.host_score + 1), 9),
-          winner_id = v_room.guest_id
-      where id = p_room_id
-      returning * into v_after;
+      v_after := public.bw_finish_by_departure(p_room_id, v_room.host_id, null);
     else
       update public.bw_rooms
       set host_left_at = coalesce(v_room.host_left_at, now()),
           guest_ready = false,
-          lead_player_id = null
+          lead_player_id = null,
+          host_last_active_at = now()
       where id = p_room_id
       returning * into v_after;
     end if;
@@ -764,47 +959,21 @@ begin
       update public.bw_rooms
       set guest_id = null,
           guest_left_at = null,
-          guest_ready = false
+          guest_last_active_at = null,
+          guest_ready = false,
+          last_departed_nickname = null
       where id = p_room_id
       returning * into v_after;
     elsif v_room.status = 'playing' then
-      update public.bw_rooms
-      set guest_left_at = coalesce(v_room.guest_left_at, now()),
-          guest_ready = false,
-          status = 'finished',
-          round_phase = 'finished',
-          lead_player_id = null,
-          host_score = least(greatest(v_room.host_score, v_room.guest_score + 1), 9),
-          winner_id = v_room.host_id
-      where id = p_room_id
-      returning * into v_after;
+      v_after := public.bw_finish_by_departure(p_room_id, v_room.guest_id, null);
     else
       update public.bw_rooms
       set guest_left_at = coalesce(v_room.guest_left_at, now()),
           guest_ready = false,
-          lead_player_id = null
+          lead_player_id = null,
+          guest_last_active_at = now()
       where id = p_room_id
       returning * into v_after;
-    end if;
-  end if;
-
-  if v_room.status = 'playing'
-     and v_after.status = 'finished'
-     and v_after.winner_id is not null then
-    v_loser_id := case
-      when v_after.winner_id = v_room.host_id then v_room.guest_id
-      when v_after.winner_id = v_room.guest_id then v_room.host_id
-      else null
-    end;
-
-    update public.bw_profiles
-    set wins = wins + 1
-    where id = v_after.winner_id;
-
-    if v_loser_id is not null then
-      update public.bw_profiles
-      set losses = losses + 1
-      where id = v_loser_id;
     end if;
   end if;
 

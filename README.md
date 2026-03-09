@@ -7,7 +7,7 @@
 
 ## 사이트 주소
 
-- 메인 접속 주소: [https://bw-genius.vercel.app](https://bw-genius.vercel.app)
+- 메인 접속 주소: [https://boardhub.cloud](https://boardhub.cloud)
 
 `bw-genius` 도메인은 초기 서비스 이름의 흔적이고, 현재 루트 앱 타이틀과 Vercel 프로젝트명은 `BoardHub` 기준으로 정리되어 있습니다.
 
@@ -20,7 +20,7 @@
 
 - 플레이 가능: `흑과 백`
 - 플레이 가능: `십이장기`
-- 개발 예정: `러브 레터`
+- 플레이 가능: `러브 레터`
 
 ## 현재 개발 현황
 
@@ -77,8 +77,17 @@
 
 ### 러브 레터
 
-저장소 이름의 출발점이기도 한 `러브 레터`는 아직 플레이 가능 상태가 아닙니다.  
-현재 랜딩 카드에는 `Coming Soon` 상태로만 연결되어 있으며, 실제 게임 로직은 아직 붙지 않았습니다.
+`러브 레터`는 2~4인 실시간 카드 테이블 게임으로 구현되어 있습니다.
+
+- 방 생성 시 2인 / 3인 / 4인 정원 선택
+- 다인용 참가자 그리드와 전용 Room Lobby
+- 러브레터 전용 카드 테이블 레이아웃
+- 카드 공개, 지목, 비교, 교환, 보호, 강제 버림 흐름
+- 라운드 공개 결과와 다음 라운드 전환
+- 비밀 폴라로이드 토큰 트랙과 최종 승자 표시
+
+백엔드 기준으로는 `ll_rooms`, `ll_room_players`, `ll_round_states`, `ll_action_logs`, `ll_player_stats`
+구조와 전용 RPC 흐름을 사용합니다.
 
 ## 스택 / 프레임워크
 
@@ -113,10 +122,13 @@
 ## 참고 문서
 
 - [흑과 백 규칙서](./docs/game-rules/black-white-rules.md)
+- [러브 레터 규칙서](./docs/game-rules/love-letter-rules.md)
 - [십이장기 규칙서](./docs/game-rules/twelve-janggi-rules.md)
 - [보드게임 UI 공통 지침](./docs/guidelines/boardgame-ui-guidelines.md)
 - [오디오 에셋 정리 문서](./docs/guidelines/audio-sourcing-guide.md)
 - [GitHub 연결 가이드](./docs/guidelines/github-connect.md)
 - [흑과 백 Supabase 스키마](./docs/schemas/bw-schema.sql)
 - [십이장기 Supabase 스키마](./docs/schemas/tj-schema.sql)
+- [러브 레터 Supabase 스키마](./docs/schemas/ll-schema.sql)
+- [러브 레터 구현 계획](./docs/implementation-plans/love-letter-implementation-plan.md)
 - [십이장기 구현 계획](./docs/implementation-plans/twelve-janggi-implementation-plan.md)

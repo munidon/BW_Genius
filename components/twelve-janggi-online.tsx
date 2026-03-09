@@ -39,6 +39,8 @@ interface TjRoomRow {
   host_nickname: string;
   guest_id: string | null;
   guest_nickname: string | null;
+  host_last_active_at: string;
+  guest_last_active_at: string | null;
   guest_ready: boolean;
   status: TjRoomStatus;
   turn_owner: string | null;
@@ -46,6 +48,7 @@ interface TjRoomRow {
   pending_try_owner: string | null;
   winner_id: string | null;
   winner_reason: string | null;
+  last_departed_nickname: string | null;
   board: unknown;
   host_hand: unknown;
   guest_hand: unknown;
@@ -60,6 +63,8 @@ interface TjRoom {
   host_nickname: string;
   guest_id: string | null;
   guest_nickname: string | null;
+  host_last_active_at: string;
+  guest_last_active_at: string | null;
   guest_ready: boolean;
   status: TjRoomStatus;
   turn_owner: TjOwner | null;
@@ -67,6 +72,7 @@ interface TjRoom {
   pending_try_owner: TjOwner | null;
   winner_id: string | null;
   winner_reason: TjWinnerReason | null;
+  last_departed_nickname: string | null;
   board: TjBoardCell[];
   host_hand: TjHandCode[];
   guest_hand: TjHandCode[];
@@ -127,6 +133,8 @@ const ROOM_SELECT = [
   "host_nickname",
   "guest_id",
   "guest_nickname",
+  "host_last_active_at",
+  "guest_last_active_at",
   "guest_ready",
   "status",
   "turn_owner",
@@ -134,6 +142,7 @@ const ROOM_SELECT = [
   "pending_try_owner",
   "winner_id",
   "winner_reason",
+  "last_departed_nickname",
   "board",
   "host_hand",
   "guest_hand",
@@ -275,7 +284,7 @@ function buildRecord(winsValue: number | null | undefined, lossesValue: number |
 function winnerReasonLabel(reason: TjWinnerReason | null) {
   if (reason === "capture_king") return "왕 포획";
   if (reason === "try") return "왕 침투";
-  if (reason === "forfeit") return "기권";
+  if (reason === "forfeit") return "이탈 종료";
   return "종료";
 }
 
@@ -565,6 +574,34 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
     clearRoomScopedState();
   }, [clearRoomScopedState, handleRoomSync]);
 
+  const sendHeartbeat = useCallback(async (targetRoomId: string) => {
+    if (!supabase) return;
+
+    const { data, error: heartbeatError } = await supabase.rpc("tj_heartbeat", {
+      p_room_id: targetRoomId,
+    });
+
+    if (heartbeatError) {
+      const normalizedError = heartbeatError.message.trim().toUpperCase();
+      if (normalizedError.includes("ROOM_NOT_FOUND")) {
+        clearRoomScopedState();
+        return;
+      }
+      if (
+        heartbeatError.code !== "PGRST202" &&
+        heartbeatError.code !== "42883" &&
+        !normalizedError.includes("NOT_ROOM_MEMBER")
+      ) {
+        console.warn("tj heartbeat failed", heartbeatError.message);
+      }
+      return;
+    }
+
+    if (data) {
+      await handleRoomSync(data as unknown as TjRoomRow);
+    }
+  }, [clearRoomScopedState, handleRoomSync]);
+
   useEffect(() => {
     if (!supabase) {
       setError("Supabase 설정이 없어 실행할 수 없습니다.");
@@ -667,6 +704,17 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
   }, [isPageVisible, loadLatestRoom, loadMyRecord, realtimeSubscribed, room, userId]);
 
   useEffect(() => {
+    if (!room?.id || room.status !== "playing" || !isPageVisible) return;
+
+    void sendHeartbeat(room.id);
+    const timer = setInterval(() => {
+      void sendHeartbeat(room.id);
+    }, 25000);
+
+    return () => clearInterval(timer);
+  }, [isPageVisible, room?.id, room?.status, sendHeartbeat]);
+
+  useEffect(() => {
     if (!room) {
       previousRoomStatusRef.current = null;
       setShowStarterCoin(false);
@@ -741,9 +789,13 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
   const selectedMoveTargetSet = useMemo(() => new Set(selectedMoveTargets), [selectedMoveTargets]);
   const selectedDropTargetSet = useMemo(() => new Set(selectedDropTargets), [selectedDropTargets]);
   const lastMove = moveLogs.length > 0 ? moveLogs[moveLogs.length - 1] : null;
-  const finishedByForfeit = useMemo(() => {
+  const finishedByDeparture = useMemo(() => {
     if (!room || room.status !== "finished") return false;
-    return room.winner_reason === "forfeit" && Boolean(room.winner_id);
+    return room.winner_reason === "forfeit" && Boolean(room.last_departed_nickname);
+  }, [room]);
+  const departureMessage = useMemo(() => {
+    if (!room || room.status !== "finished" || !room.last_departed_nickname) return "";
+    return `${room.last_departed_nickname}님이 떠나 게임을 종료합니다.`;
   }, [room]);
   const myResultText = useMemo(() => {
     if (!room || room.status !== "finished" || !userId) return "";
@@ -779,13 +831,13 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
       room.status === "finished" &&
       Boolean(room.winner_id);
 
-    if (justFinishedWithWinner && userId && room.winner_id === userId && finishedByForfeit) {
-      setNotice("상대 플레이어가 기권했습니다. 종료 화면에서 최종 보드를 확인할 수 있습니다.");
+    if (justFinishedWithWinner && userId && room.winner_id === userId && finishedByDeparture) {
+      setNotice(departureMessage || "상대 플레이어가 떠나 게임이 종료되었습니다.");
       setLeaveConfirmOpen(false);
     }
 
     setLastRoomSnapshot(room);
-  }, [finishedByForfeit, lastRoomSnapshot, room, userId]);
+  }, [departureMessage, finishedByDeparture, lastRoomSnapshot, room, userId]);
 
   useEffect(() => {
     if (!roomFinished) {
@@ -1369,6 +1421,11 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                     <p className="mt-1 text-emerald-50/80">
                       {winnerName ? `${winnerName} 승리` : "대국 종료"} · {winnerReasonLabel(room.winner_reason)}
                     </p>
+                    {departureMessage && (
+                      <div className="mt-3 rounded-[1rem] border border-lime-200/20 bg-lime-200/10 p-3 text-sm font-semibold text-lime-50">
+                        {departureMessage}
+                      </div>
+                    )}
                     <div className="mt-3 rounded-[1rem] border border-emerald-100/10 bg-[#0d2119] p-3 text-sm">
                       <div className="grid gap-2 text-emerald-50/80 md:grid-cols-3">
                         <p>최종 판정: {winnerReasonLabel(room.winner_reason)}</p>
@@ -1377,7 +1434,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                       </div>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {myRole === "host" && !finishedByForfeit && (
+                      {myRole === "host" && !finishedByDeparture && (
                         <button
                           type="button"
                           onClick={() => void resetRoom()}
@@ -1394,13 +1451,13 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                       >
                         게임 나가기
                       </button>
-                      {myRole === "host" && finishedByForfeit && (
-                        <p className="text-sm text-emerald-50/70">상대가 기권 후 나가 Room으로 복귀할 수 없습니다.</p>
+                      {myRole === "host" && finishedByDeparture && (
+                        <p className="text-sm text-emerald-50/70">상대가 이탈하거나 잠수해 Room으로 복귀할 수 없습니다.</p>
                       )}
                       {myRole !== "host" && (
                         <p className="text-sm text-emerald-50/70">
-                          {finishedByForfeit
-                            ? "상대가 기권 후 나가 Room으로 복귀할 수 없습니다."
+                          {finishedByDeparture
+                            ? "상대가 이탈하거나 잠수해 Room으로 복귀할 수 없습니다."
                             : "호스트가 Room 복귀 버튼을 누르면 다음 대국을 준비할 수 있습니다."}
                         </p>
                       )}

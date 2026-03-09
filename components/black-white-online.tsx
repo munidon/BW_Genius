@@ -47,6 +47,8 @@ interface BwRoom {
   room_code: string;
   host_id: string;
   guest_id: string | null;
+  host_last_active_at: string;
+  guest_last_active_at: string | null;
   guest_ready: boolean;
   status: RoomStatus;
   current_round: number;
@@ -55,6 +57,7 @@ interface BwRoom {
   host_score: number;
   guest_score: number;
   winner_id: string | null;
+  last_departed_nickname: string | null;
   updated_at: string;
 }
 
@@ -489,15 +492,14 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       return { roundNo, hostTile, guestTile, roundResult };
     });
   }, [room, rounds, revealedRows]);
-  const currentRoundResult = useMemo(() => {
-    if (!room || room.current_round <= 0) return null;
-    return rounds.find((r) => r.round_number === room.current_round)?.result ?? null;
-  }, [room, rounds]);
-  const finishedByForfeit = useMemo(() => {
+  const finishedByDeparture = useMemo(() => {
     if (!room || room.status !== "finished") return false;
-    if (!room.winner_id) return false;
-    return currentRoundResult === null;
-  }, [room, currentRoundResult]);
+    return Boolean(room.last_departed_nickname);
+  }, [room]);
+  const departureMessage = useMemo(() => {
+    if (!room || room.status !== "finished" || !room.last_departed_nickname) return "";
+    return `${room.last_departed_nickname}님이 떠나 게임을 종료합니다.`;
+  }, [room]);
 
   const activePlayerId = useMemo(() => {
     if (!room || room.status !== "playing" || !currentRound) return null;
@@ -782,7 +784,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     const isObsolete = () =>
       uid !== userIdRef.current || (authSyncSeq !== undefined && authSyncSeq !== authSyncSeqRef.current);
     const roomSelect =
-      "id,room_code,host_id,guest_id,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id,updated_at";
+      "id,room_code,host_id,guest_id,host_last_active_at,guest_last_active_at,guest_ready,status,current_round,round_phase,lead_player_id,host_score,guest_score,winner_id,last_departed_nickname,updated_at";
     const currentRoomId = roomRef.current?.id ?? null;
     const localRoom = roomRef.current;
 
@@ -841,6 +843,34 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
     }
 
     clearRoomScopedState();
+  }, [clearRoomScopedState, handleRoomSync]);
+
+  const sendHeartbeat = useCallback(async (targetRoomId: string) => {
+    if (!supabase) return;
+
+    const { data, error: heartbeatError } = await supabase.rpc("bw_heartbeat", {
+      p_room_id: targetRoomId,
+    });
+
+    if (heartbeatError) {
+      const normalizedError = heartbeatError.message.trim().toUpperCase();
+      if (normalizedError.includes("ROOM_NOT_FOUND")) {
+        clearRoomScopedState();
+        return;
+      }
+      if (
+        heartbeatError.code !== "PGRST202" &&
+        heartbeatError.code !== "42883" &&
+        !normalizedError.includes("NOT_ROOM_MEMBER")
+      ) {
+        console.warn("bw heartbeat failed", heartbeatError.message);
+      }
+      return;
+    }
+
+    if (data) {
+      await handleRoomSync(data as BwRoom);
+    }
   }, [clearRoomScopedState, handleRoomSync]);
 
   useEffect(() => {
@@ -958,6 +988,17 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
   }, [isPageVisible, loadLatestRoom, loadRounds, roomId, roomStatus]);
 
   useEffect(() => {
+    if (!roomId || roomStatus !== "playing" || !isPageVisible) return;
+
+    void sendHeartbeat(roomId);
+    const t = setInterval(() => {
+      void sendHeartbeat(roomId);
+    }, 25000);
+
+    return () => clearInterval(t);
+  }, [isPageVisible, roomId, roomStatus, sendHeartbeat]);
+
+  useEffect(() => {
     if (!room) return;
     if (!lastRoomSnapshot) {
       setLastRoomSnapshot(room);
@@ -969,13 +1010,13 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
       room.status === "finished" &&
       Boolean(room.winner_id);
 
-    if (justFinishedWithWinner && userId && room.winner_id === userId && finishedByForfeit) {
-      setNotice("상대 플레이어가 기권했습니다. 종료 화면에서 라운드 숫자를 확인할 수 있습니다.");
+    if (justFinishedWithWinner && userId && room.winner_id === userId && finishedByDeparture) {
+      setNotice(departureMessage || "상대 플레이어가 떠나 게임이 종료되었습니다.");
       setLeaveConfirmOpen(false);
     }
 
     setLastRoomSnapshot(room);
-  }, [room, userId, lastRoomSnapshot, finishedByForfeit]);
+  }, [departureMessage, room, userId, lastRoomSnapshot, finishedByDeparture]);
 
   useEffect(() => {
     if (!userId || !roomId || !roomStatus) return;
@@ -1621,6 +1662,11 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
                 <p className="mt-1 text-red-100/80">
                   최종 점수 {room.host_score} : {room.guest_score}
                 </p>
+                {departureMessage && (
+                  <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-sm font-semibold text-amber-50">
+                    {departureMessage}
+                  </div>
+                )}
                 <div className="mt-3 rounded-xl border border-slate-500/60 bg-slate-700/40 p-3 text-sm">
                   <p className="mb-2 font-bold">라운드별 숫자 공개</p>
                   <div className="space-y-2 text-red-100/80">
@@ -1662,7 +1708,7 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
                   </div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {myRole === "host" && !finishedByForfeit && (
+                  {myRole === "host" && !finishedByDeparture && (
                     <button type="button" onClick={resetRoom} className="rounded-lg bg-red-500 px-4 py-2 font-bold text-black">
                       Room으로 복귀
                     </button>
@@ -1674,13 +1720,13 @@ export function BlackWhiteOnline({ entryHref = "/" }: { entryHref?: string }) {
                   >
                     게임 나가기
                   </button>
-                  {myRole === "host" && finishedByForfeit && (
-                    <p className="text-sm text-red-100/70">상대가 기권 후 나가 Room으로 복귀할 수 없습니다.</p>
+                  {myRole === "host" && finishedByDeparture && (
+                    <p className="text-sm text-red-100/70">상대가 이탈하거나 잠수해 Room으로 복귀할 수 없습니다.</p>
                   )}
                   {myRole !== "host" && (
                     <p className="text-sm text-red-100/70">
-                      {finishedByForfeit
-                        ? "상대가 기권 후 나가 Room으로 복귀할 수 없습니다."
+                      {finishedByDeparture
+                        ? "상대가 이탈하거나 잠수해 Room으로 복귀할 수 없습니다."
                         : "호스트가 Room 복귀 버튼을 누르면 다음 게임을 준비할 수 있습니다."}
                     </p>
                   )}
