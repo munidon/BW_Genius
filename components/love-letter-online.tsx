@@ -73,14 +73,48 @@ function LoveLetterRoomPlayerCard({
 }) {
   return (
     <div
-      className={`rounded-xl bg-black/35 p-3 ${
-        emphasized ? "border-2 border-white/90" : "border border-[#ffd5cc]/20"
-      }`}
+      className={`rounded-xl bg-black/35 p-3 ${emphasized ? "border-2 border-white/90" : "border border-[#ffd5cc]/20"
+        }`}
     >
       <p className="text-sm text-[#f8e6e2]/70">{title}</p>
       <p className="text-lg font-bold text-white">{name}</p>
       <p className="text-sm text-white/85">{stateText}</p>
       <p className="mt-1 text-xs text-[#f8e6e2]/80">{tokenText}</p>
+    </div>
+  );
+}
+
+function PlayerTokenTrackCard({
+  name,
+  count,
+  goal,
+  emphasized,
+  champion = false,
+}: {
+  name: string;
+  count: number;
+  goal: number;
+  emphasized: boolean;
+  champion?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-[1.5rem] border p-4 backdrop-blur-xl ${champion
+        ? "border-amber-200/40 bg-amber-200/10 shadow-[0_0_32px_rgba(251,191,36,0.14)]"
+        : emphasized
+          ? "border-white/30 bg-white/10"
+          : "border-white/10 bg-black/20"
+        }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate text-base font-black text-white">{name}</p>
+        <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-bold text-white/65">
+          {count} / {goal}
+        </span>
+      </div>
+      <div className="mt-4">
+        <TokenTrack count={count} goal={goal} compact />
+      </div>
     </div>
   );
 }
@@ -607,7 +641,7 @@ function BroadcasterModal({
                       onClick={() => onMove(index, "left")}
                       className="rounded-full border border-white/10 px-3 py-1 text-xs font-bold text-white/75 disabled:opacity-30"
                     >
-                      앞
+                      ◀️
                     </button>
                     <button
                       type="button"
@@ -615,7 +649,7 @@ function BroadcasterModal({
                       onClick={() => onMove(index, "right")}
                       className="rounded-full border border-white/10 px-3 py-1 text-xs font-bold text-white/75 disabled:opacity-30"
                     >
-                      뒤
+                      ▶️
                     </button>
                   </div>
                 </div>
@@ -1404,11 +1438,10 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                         key={limit}
                         type="button"
                         onClick={() => setSelectedPlayerLimit(limit)}
-                        className={`rounded-lg px-4 py-2 text-sm font-bold transition ${
-                          selectedPlayerLimit === limit
-                            ? "bg-[#f8e6e2] text-[#250e1c]"
-                            : "border border-[#ffd5cc]/20 bg-black/30 text-white/85 hover:bg-white/10"
-                        }`}
+                        className={`rounded-lg px-4 py-2 text-sm font-bold transition ${selectedPlayerLimit === limit
+                          ? "bg-[#f8e6e2] text-[#250e1c]"
+                          : "border border-[#ffd5cc]/20 bg-black/30 text-white/85 hover:bg-white/10"
+                          }`}
                       >
                         {limit}인
                       </button>
@@ -1496,24 +1529,34 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
               </div>
 
               <div
-                className={`mt-5 grid gap-3 ${
-                  activePlayers.length <= 2
-                    ? "md:grid-cols-2"
-                    : activePlayers.length === 3
-                      ? "md:grid-cols-3"
-                      : "md:grid-cols-2 xl:grid-cols-4"
-                }`}
+                className={`mt-5 grid gap-3 ${activePlayers.length <= 2
+                  ? "md:grid-cols-2"
+                  : activePlayers.length === 3
+                    ? "md:grid-cols-3"
+                    : "md:grid-cols-2 xl:grid-cols-4"
+                  }`}
               >
-                {activePlayers.map((player) => (
-                  <LoveLetterRoomPlayerCard
-                    key={player.player_id}
-                    title={getRoleLabel(player, room)}
-                    name={player.nickname_snapshot}
-                    stateText={getLoveLetterLobbyStateText(player)}
-                    tokenText={`비밀 폴라로이드 ${player.token_count} / ${tokenGoal}`}
-                    emphasized={player.player_id === userId || room.status === "waiting"}
-                  />
-                ))}
+                {room.status === "waiting"
+                  ? activePlayers.map((player) => (
+                    <LoveLetterRoomPlayerCard
+                      key={player.player_id}
+                      title={getRoleLabel(player, room)}
+                      name={player.nickname_snapshot}
+                      stateText={getLoveLetterLobbyStateText(player)}
+                      tokenText={`비밀 폴라로이드 ${player.token_count} / ${tokenGoal}`}
+                      emphasized={player.player_id === userId || room.status === "waiting"}
+                    />
+                  ))
+                  : activePlayers.map((player) => (
+                    <PlayerTokenTrackCard
+                      key={`${player.player_id}-track`}
+                      name={player.nickname_snapshot}
+                      count={player.token_count}
+                      goal={tokenGoal}
+                      emphasized={player.player_id === userId}
+                      champion={matchWinnerSet.has(player.player_id)}
+                    />
+                  ))}
               </div>
 
               {room.status === "waiting" && (
@@ -1571,31 +1614,6 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                       <div className="mt-4 rounded-[1.3rem] border border-white/10 bg-white/5 p-4">
                         <p className="text-sm font-semibold text-white/80">{getLlTurnNotice(view, userId)}</p>
                         {view.recent_private_message && <p className="mt-2 text-xs text-white/55">{view.recent_private_message}</p>}
-                      </div>
-                    </div>
-
-                    <div className="rounded-[1.75rem] border border-white/10 bg-black/25 p-5 backdrop-blur-xl">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f7d6d5]/60">Token Track</p>
-                          <h3 className="mt-2 text-xl font-black text-white">비밀 폴라로이드 토큰</h3>
-                        </div>
-                        <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-bold text-white/65">
-                          목표 {tokenGoal}
-                        </span>
-                      </div>
-                      <div className="mt-4 space-y-4">
-                        {activePlayers.map((player) => (
-                          <div key={`${player.player_id}-token-track`} className="rounded-[1.25rem] border border-white/8 bg-white/5 p-4">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="text-sm font-black text-white">{player.nickname_snapshot}</p>
-                              <p className="text-xs text-white/55">{player.token_count}개 확보</p>
-                            </div>
-                            <div className="mt-3">
-                              <TokenTrack count={player.token_count} goal={tokenGoal} compact />
-                            </div>
-                          </div>
-                        ))}
                       </div>
                     </div>
 
