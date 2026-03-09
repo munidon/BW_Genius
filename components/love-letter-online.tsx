@@ -163,6 +163,8 @@ function LoveLetterCardFace({
   cardId,
   hidden = false,
   compact = false,
+  featured = false,
+  imageOnly = false,
   selected = false,
   disabled = false,
   emphasis = false,
@@ -171,13 +173,15 @@ function LoveLetterCardFace({
   cardId?: LlCardId;
   hidden?: boolean;
   compact?: boolean;
+  featured?: boolean;
+  imageOnly?: boolean;
   selected?: boolean;
   disabled?: boolean;
   emphasis?: boolean;
   onClick?: () => void;
 }) {
   const definition = cardId !== undefined ? getLoveLetterCard(cardId) : null;
-  const className = `group relative overflow-hidden rounded-[1.6rem] border text-left transition ${compact ? "w-[104px] p-2" : "w-full p-3"
+  const className = `group relative overflow-hidden rounded-[1.6rem] border text-left transition ${compact ? featured ? "w-[118px] p-2.5" : "w-[104px] p-2" : "w-full p-3"
     } ${hidden
       ? "border-white/10 bg-[linear-gradient(160deg,rgba(255,255,255,0.06),rgba(255,255,255,0.02))]"
       : "bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))]"
@@ -191,36 +195,62 @@ function LoveLetterCardFace({
 
   const content = !hidden && definition ? (
     <>
-      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${definition.accentClassName}`} />
-      <div className={`relative overflow-hidden rounded-[1.2rem] border border-white/10 bg-black/35 ${compact ? "h-24" : "h-36"}`}>
+      {!imageOnly && <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${definition.accentClassName}`} />}
+      <div
+        className={`relative overflow-hidden rounded-[1.2rem] border border-white/10 bg-black/35 ${compact
+          ? featured
+            ? "h-28"
+            : "h-24"
+          : imageOnly
+            ? "aspect-[3/4]"
+            : "h-36"
+          }`}
+      >
         <Image
           src={definition.imageSrc}
           alt={definition.name}
           fill
-          className="object-cover transition duration-300 group-hover:scale-[1.03]"
+          className="object-contain p-2 transition duration-300 group-hover:scale-[1.03]"
         />
-        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#14090f] via-[#14090f]/70 to-transparent" />
-        <div className="absolute left-3 top-3 rounded-full border border-white/15 bg-black/45 px-2 py-1 text-xs font-black text-white">
-          {definition.id}
-        </div>
+        {!imageOnly && (
+          <>
+            <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#14090f] via-[#14090f]/70 to-transparent" />
+            <div className="absolute left-3 top-3 rounded-full border border-white/15 bg-black/45 px-2 py-1 text-xs font-black text-white">
+              {definition.id}
+            </div>
+          </>
+        )}
       </div>
-      <div className={compact ? "mt-2" : "mt-3"}>
-        <p className={`text-[11px] font-bold uppercase tracking-[0.3em] text-[#f6ddd6]/65 ${compact ? "" : "md:text-xs"}`}>
-          {definition.englishName}
-        </p>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <p className={`${compact ? "text-sm" : "text-lg"} font-black text-white`}>{definition.name}</p>
-          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-bold text-white/70">
-            x{definition.copies}
-          </span>
+      {!imageOnly && (
+        <div className={compact ? "mt-2.5" : "mt-3"}>
+          <p className={`font-bold uppercase tracking-[0.3em] text-[#f6ddd6]/65 ${compact ? featured ? "text-xs" : "text-[11px]" : "text-[11px] md:text-xs"}`}>
+            {definition.englishName}
+          </p>
+          <div className="mt-1 flex items-center justify-between gap-2">
+            <p className={`${compact ? featured ? "text-[15px]" : "text-sm" : "text-lg"} font-black text-white`}>
+              {definition.name}
+            </p>
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-bold text-white/70">
+              x{definition.copies}
+            </span>
+          </div>
+          <p className={`mt-2 text-white/85 ${compact ? featured ? "text-xs leading-5" : "text-[11px] leading-4" : "text-sm leading-5"}`}>
+            {compact ? definition.summary : definition.effect}
+          </p>
         </div>
-        <p className={`mt-2 text-white/85 ${compact ? "text-[11px] leading-4" : "text-sm leading-5"}`}>
-          {compact ? definition.summary : definition.effect}
-        </p>
-      </div>
+      )}
     </>
   ) : (
-    <div className={`flex h-full min-h-[160px] flex-col justify-between rounded-[1.25rem] border border-white/10 bg-[#211019]/70 p-4 ${compact ? "min-h-[118px]" : ""}`}>
+    <div
+      className={`flex h-full min-h-[160px] flex-col justify-between rounded-[1.25rem] border border-white/10 bg-[#211019]/70 p-4 ${compact
+        ? featured
+          ? "min-h-[148px]"
+          : "min-h-[118px]"
+        : imageOnly
+          ? "min-h-[280px]"
+          : ""
+        }`}
+    >
       <div>
         <p className="text-[11px] font-bold uppercase tracking-[0.4em] text-[#f8e7e2]/55">Secret</p>
         <p className="mt-3 text-xl font-black text-white">비공개 손패</p>
@@ -302,6 +332,7 @@ function ActionLogPanel({ logs }: { logs: LlRoomView["logs"] }) {
 
 function PlayerSeatCard({
   player,
+  isSelf,
   isHost,
   isTurnPlayer,
   isStarter,
@@ -311,6 +342,7 @@ function PlayerSeatCard({
   isMatchWinner,
   tokenGoal,
   handCount,
+  showBoardHand,
   visibleHand,
   discardPile,
   selectable,
@@ -318,6 +350,7 @@ function PlayerSeatCard({
   onSelect,
 }: {
   player: LlRoomPlayerRow;
+  isSelf: boolean;
   isHost: boolean;
   isTurnPlayer: boolean;
   isStarter: boolean;
@@ -327,18 +360,14 @@ function PlayerSeatCard({
   isMatchWinner: boolean;
   tokenGoal: number;
   handCount: number;
+  showBoardHand: boolean;
   visibleHand: LlCardId[];
   discardPile: LlCardId[];
   selectable: boolean;
   selected: boolean;
   onSelect?: () => void;
 }) {
-  return (
-    <button
-      type="button"
-      disabled={!onSelect}
-      onClick={onSelect}
-      className={`w-[min(280px,78vw)] rounded-[1.6rem] border p-4 text-left shadow-xl backdrop-blur-xl transition ${isEliminated
+  const cardClassName = `w-full rounded-[1.6rem] border p-4 text-left shadow-xl backdrop-blur-xl transition ${isEliminated
         ? "border-rose-400/20 bg-[#251015]/70 grayscale"
         : isMatchWinner
           ? "border-amber-200/65 bg-[#251712]/82 shadow-[0_0_36px_rgba(251,191,36,0.18)]"
@@ -349,8 +378,10 @@ function PlayerSeatCard({
               : selectable
                 ? "border-cyan-100/45 bg-[#1f1320]/86 hover:-translate-y-1 hover:border-cyan-100/85"
                 : "border-white/10 bg-[#1d111c]/84"
-        }`}
-    >
+        }`;
+
+  const cardBody = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -379,9 +410,14 @@ function PlayerSeatCard({
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-white/65">
+      <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-white/65">
         <div className="rounded-2xl border border-white/8 bg-white/5 px-3 py-2">
-          <p className="font-bold uppercase tracking-[0.25em] text-white/40">Discard</p>
+          <p className="font-bold uppercase tracking-[0.25em] text-white/40">Hand</p>
+          <p className="mt-1 text-sm font-bold text-white">{handCount}장</p>
+          <p className="text-[11px] text-white/45">{isSelf ? "보드는 비공개" : "남은 손패 수"}</p>
+        </div>
+        <div className="rounded-2xl border border-white/8 bg-white/5 px-3 py-2">
+          <p className="font-bold uppercase tracking-[0.25em] text-white/40">Public</p>
           <p className="mt-1 text-sm font-bold text-white">{discardPile.length}장</p>
           <p className="text-[11px] text-white/45">합 {getLlPublicDiscardSum(discardPile)}</p>
         </div>
@@ -394,39 +430,71 @@ function PlayerSeatCard({
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {visibleHand.length > 0 ? (
-          visibleHand.map((cardId, index) => (
-            <div key={`${player.player_id}-visible-${cardId}-${index}`} className="w-[82px]">
-              <LoveLetterCardFace cardId={cardId} compact />
-            </div>
-          ))
-        ) : (
-          Array.from({ length: Math.max(1, handCount || 1) }, (_, index) => (
-            <div key={`${player.player_id}-hidden-${index}`} className="w-[82px]">
-              <LoveLetterCardFace hidden compact />
-            </div>
-          ))
-        )}
-      </div>
-
-      {discardPile.length > 0 && (
-        <div className="mt-4 flex flex-wrap gap-2">
-          {discardPile.map((cardId, index) => {
-            const card = getLoveLetterCard(cardId);
-            return (
-              <span
-                key={`${player.player_id}-discard-${cardId}-${index}`}
-                className="rounded-full border border-white/10 bg-white/6 px-3 py-1 text-[11px] font-semibold text-white/75"
-              >
-                {card.name}
-              </span>
-            );
-          })}
+      {showBoardHand && (
+        <div className="mt-4 rounded-[1.35rem] border border-white/10 bg-black/20 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-white/45">Visible Hand</p>
+            <p className="text-[11px] text-white/45">
+              {visibleHand.length > 0 ? `${visibleHand.length}장 공개` : `${handCount}장 보유`}
+            </p>
+          </div>
+          <div className="mt-3 flex gap-2 overflow-x-auto pb-2">
+            {visibleHand.length > 0 ? (
+              visibleHand.map((cardId, index) => (
+                <div key={`${player.player_id}-visible-${cardId}-${index}`} className="shrink-0">
+                  <LoveLetterCardFace cardId={cardId} compact />
+                </div>
+              ))
+            ) : (
+              Array.from({ length: Math.max(1, handCount || 1) }, (_, index) => (
+                <div key={`${player.player_id}-hidden-${index}`} className="shrink-0">
+                  <LoveLetterCardFace hidden compact />
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
-    </button>
+
+      <div className="mt-4 rounded-[1.35rem] border border-white/10 bg-black/20 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-white/45">Public Cards</p>
+            <p className="mt-1 text-sm font-black text-white">{player.nickname_snapshot}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-sm font-black text-white">{discardPile.length}장</p>
+            <p className="text-[11px] text-white/45">합 {getLlPublicDiscardSum(discardPile)}</p>
+          </div>
+        </div>
+        <div className="mt-3">
+          {discardPile.length > 0 ? (
+            <div className="flex gap-3 overflow-x-auto pb-2">
+              {discardPile.map((cardId, index) => (
+                <div key={`${player.player_id}-public-${cardId}-${index}`} className="shrink-0">
+                  <LoveLetterCardFace cardId={cardId} compact featured />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-28 items-center justify-center rounded-[1.1rem] border border-dashed border-white/10 bg-white/5 text-sm text-white/45">
+              공개 카드 없음
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
+
+  if (onSelect) {
+    return (
+      <button type="button" onClick={onSelect} className={cardClassName}>
+        {cardBody}
+      </button>
+    );
+  }
+
+  return <div className={cardClassName}>{cardBody}</div>;
 }
 
 function PrivateResultModal({
@@ -577,18 +645,18 @@ function BroadcasterModal({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 p-4"
+        className="fixed inset-0 z-[90] overflow-y-auto bg-black/70 p-3 sm:p-4"
       >
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 20 }}
-          className="w-full max-w-4xl rounded-[2rem] border border-white/10 bg-[#130911]/95 p-6 shadow-2xl"
+          className="mx-auto my-4 w-full max-w-4xl rounded-[2rem] border border-white/10 bg-[#130911]/95 p-4 shadow-2xl sm:p-6"
         >
-          <div className="flex items-start justify-between gap-3">
-            <div>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
               <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f6ddd6]/60">Broadcaster</p>
-              <h3 className="mt-2 text-2xl font-black text-white">남길 카드와 덱 아래 순서를 선택하세요</h3>
+              <h3 className="mt-2 text-xl font-black text-white sm:text-2xl">남길 카드와 덱 아래 순서를 선택하세요</h3>
               <p className="mt-3 text-sm leading-6 text-white/75">
                 남길 카드 1장을 먼저 고르고, 나머지 카드는 고르는 순서대로 덱 맨 아래로 들어갑니다.
               </p>
@@ -596,25 +664,27 @@ function BroadcasterModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-full border border-white/10 px-3 py-1 text-sm font-bold text-white/80"
+              className="shrink-0 self-end rounded-full border border-white/10 px-3 py-1 text-sm font-bold text-white/80 sm:self-auto"
             >
               닫기
             </button>
           </div>
 
-          <div className="mt-6 grid gap-4 lg:grid-cols-3">
+          <div className="mt-6 flex gap-4 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 sm:overflow-visible sm:pb-0 lg:grid-cols-3">
             {options.map((cardId, index) => (
-              <LoveLetterCardFace
-                key={`${cardId}-${index}`}
-                cardId={cardId}
-                selected={keptCardId === cardId}
-                onClick={() => onPickKept(cardId)}
-              />
+              <div key={`${cardId}-${index}`} className="w-[min(220px,72vw)] shrink-0 sm:w-auto">
+                <LoveLetterCardFace
+                  cardId={cardId}
+                  imageOnly
+                  selected={keptCardId === cardId}
+                  onClick={() => onPickKept(cardId)}
+                />
+              </div>
             ))}
           </div>
 
           <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-black/25 p-4">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f6ddd6]/60">Bottom Order</p>
                 <p className="mt-2 text-sm text-white/70">왼쪽에서 오른쪽 순서대로 먼저 내려갑니다.</p>
@@ -628,11 +698,11 @@ function BroadcasterModal({
                 선택 확정
               </button>
             </div>
-            <div className="mt-4 flex flex-wrap gap-4">
+            <div className="mt-4 flex gap-4 overflow-x-auto pb-2">
               {bottomOrder.map((cardId, index) => (
-                <div key={`${cardId}-${index}`} className="rounded-[1.25rem] border border-white/10 bg-white/5 p-3">
-                  <div className="w-[110px]">
-                    <LoveLetterCardFace cardId={cardId} compact />
+                <div key={`${cardId}-${index}`} className="shrink-0 rounded-[1.25rem] border border-white/10 bg-white/5 p-3">
+                  <div className="w-[118px]">
+                    <LoveLetterCardFace cardId={cardId} compact featured imageOnly />
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-2">
                     <button
@@ -866,6 +936,19 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     activePlayers.length === room.player_limit &&
     activePlayers.every((player) => player.ready)
   );
+  const centerNoteTitle = !view
+    ? ""
+    : view.round_phase === "await_next_round"
+      ? view.round_winner_ids.length > 1
+        ? "공동 라운드 승리"
+        : "라운드 결과 공개"
+      : view.round_phase === "match_finished"
+        ? "매치 결과 확정"
+      : view.round_phase === "await_broadcaster_resolution" && view.current_turn_player_id === userId
+        ? "방송부장 정리"
+      : view.current_turn_player_id
+        ? `${playerMap[view.current_turn_player_id]?.nickname_snapshot ?? "플레이어"} 차례`
+      : "진행 상황";
 
   useEffect(() => {
     if (!selectedCardId) {
@@ -1611,10 +1694,47 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                         />
                         <RoundMetric label="Deck" value={`${view.deck_count}장 남음`} />
                       </div>
-                      <div className="mt-4 rounded-[1.3rem] border border-white/10 bg-white/5 p-4">
-                        <p className="text-sm font-semibold text-white/80">{getLlTurnNotice(view, userId)}</p>
-                        {view.recent_private_message && <p className="mt-2 text-xs text-white/55">{view.recent_private_message}</p>}
-                      </div>
+
+                      {(view.round_phase === "await_next_round" || view.round_phase === "match_finished") && (
+                        <div className="mt-4 rounded-[1.3rem] border border-amber-200/15 bg-amber-200/8 p-4">
+                          <p className="text-xs font-bold uppercase tracking-[0.35em] text-amber-50/75">Round Reveal</p>
+                          <p className="mt-2 text-lg font-black text-white">
+                            {view.round_winner_ids.length > 1 ? "공동 라운드 승리" : "라운드 승자 확정"}
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-white/75">
+                            {view.round_winner_ids.length > 0
+                              ? view.round_winner_ids
+                                .map((winnerId) => playerMap[winnerId]?.nickname_snapshot ?? "플레이어")
+                                .join(", ")
+                              : "라운드 승자 정보 없음"}
+                          </p>
+                          <p className="mt-2 text-xs text-white/55">
+                            {getLlRoundEndReasonLabel(view.end_reason)}
+                          </p>
+                          {Object.keys(view.tiebreak_sums).length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {Object.entries(view.tiebreak_sums).map(([playerId, sum]) => (
+                                <span
+                                  key={`${playerId}-sum`}
+                                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/75"
+                                >
+                                  {(playerMap[playerId]?.nickname_snapshot ?? "플레이어")} 공개 카드 합 {sum}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {canAdvanceRound && (
+                            <button
+                              type="button"
+                              onClick={() => void advanceToNextRound()}
+                              disabled={loading}
+                              className="mt-4 rounded-full bg-[#d95b5f] px-4 py-2 text-sm font-black text-white disabled:opacity-45"
+                            >
+                              다음 라운드
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <ActionLogPanel logs={view.logs} />
@@ -1622,116 +1742,64 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
 
                   <div className="space-y-4">
                     <div className="rounded-[2rem] border border-white/10 bg-black/25 p-5 backdrop-blur-xl">
-                      <div className="grid gap-4 md:grid-cols-[0.8fr_1.2fr]">
-                        <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
-                          <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f7d6d5]/60">Table Center</p>
-                          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                            <div className="rounded-[1.25rem] border border-white/10 bg-black/35 p-4">
-                              <p className="text-xs font-bold uppercase tracking-[0.3em] text-white/45">Draw Deck</p>
-                              <div className="mt-4 flex h-28 items-center justify-center rounded-[1.15rem] border border-dashed border-white/15 bg-white/5 text-4xl font-black text-white">
-                                {view.deck_count}
-                              </div>
+                      <div className="relative h-[700px] overflow-hidden rounded-[1.5rem] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_25%),linear-gradient(180deg,rgba(46,14,33,0.85),rgba(20,8,17,0.92))]">
+                        <div className="absolute inset-6 rounded-[1.75rem] border border-white/10 bg-[radial-gradient(circle_at_center,rgba(255,235,215,0.06),transparent_42%),linear-gradient(180deg,rgba(18,9,17,0.15),rgba(18,9,17,0.05))]" />
+
+                        <div className="absolute left-1/2 top-1/2 z-20 w-[min(280px,66vw)] -translate-x-1/2 -translate-y-1/2 rounded-[1.6rem] border border-white/10 bg-[#1b0f19]/88 p-5 text-center shadow-[0_24px_50px_rgba(0,0,0,0.32)] backdrop-blur-xl">
+                          <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-[#f7d6d5]/60">Center Note</p>
+                          <h3 className="mt-3 text-2xl font-black text-white">{centerNoteTitle}</h3>
+                          <p className="mt-3 text-sm leading-6 text-white/75">{getLlTurnNotice(view, userId)}</p>
+                          {view.recent_private_message && <p className="mt-3 text-xs text-white/55">{view.recent_private_message}</p>}
+                        </div>
+
+                        {seatPlacements.map((placement) => {
+                          const player = playerMap[placement.playerId];
+                          if (!player) return null;
+                          const isSelf = placement.isSelf;
+                          const visibleHand = getLlVisibleHand(view, player.player_id, isSelf);
+                          const handCount = isSelf ? myHand.length : getLlCurrentHandCount(view, player.player_id);
+                          const discardPile = view.discard_piles[player.player_id] ?? [];
+                          const selectable = Boolean(
+                            myTurn &&
+                            selectedCard &&
+                            validTargetIds.includes(player.player_id) &&
+                            player.player_id !== userId
+                          );
+
+                          return (
+                            <div
+                              key={player.player_id}
+                              className={`absolute z-10 ${isSelf ? "w-[min(340px,86vw)]" : "w-[min(300px,78vw)]"}`}
+                              style={placement.style}
+                            >
+                              <PlayerSeatCard
+                                player={player}
+                                isSelf={isSelf}
+                                isHost={room.host_id === player.player_id}
+                                isTurnPlayer={view.current_turn_player_id === player.player_id}
+                                isStarter={view.starter_player_id === player.player_id}
+                                isProtected={protectedSet.has(player.player_id)}
+                                isEliminated={eliminatedSet.has(player.player_id)}
+                                isRoundWinner={roundWinnerSet.has(player.player_id)}
+                                isMatchWinner={matchWinnerSet.has(player.player_id)}
+                                tokenGoal={tokenGoal}
+                                handCount={handCount}
+                                showBoardHand={canSeeAllHands && !isSelf}
+                                visibleHand={canSeeAllHands && !isSelf ? visibleHand : []}
+                                discardPile={discardPile}
+                                selectable={selectable}
+                                selected={selectedTargetId === player.player_id}
+                                onSelect={selectable ? () => setSelectedTargetId(player.player_id) : undefined}
+                              />
                             </div>
-                            <div className="rounded-[1.25rem] border border-white/10 bg-black/35 p-4">
-                              <p className="text-xs font-bold uppercase tracking-[0.3em] text-white/45">Burned Card</p>
-                              <div className="mt-4 flex h-28 items-center justify-center rounded-[1.15rem] border border-dashed border-white/15 bg-white/5">
-                                <LoveLetterCardFace hidden compact />
-                              </div>
-                            </div>
+                          );
+                        })}
+
+                        {view.spectator_mode && (
+                          <div className="absolute inset-x-6 top-6 z-30 rounded-full border border-cyan-200/20 bg-cyan-300/10 px-4 py-3 text-center text-sm font-bold text-cyan-50">
+                            라운드 종료까지 관전 중입니다. 남아 있는 플레이어 손패를 공개합니다.
                           </div>
-
-                          {(view.round_phase === "await_next_round" || view.round_phase === "match_finished") && (
-                            <div className="mt-4 rounded-[1.3rem] border border-amber-200/15 bg-amber-200/8 p-4">
-                              <p className="text-xs font-bold uppercase tracking-[0.35em] text-amber-50/75">Round Reveal</p>
-                              <p className="mt-2 text-lg font-black text-white">
-                                {view.round_winner_ids.length > 1 ? "공동 라운드 승리" : "라운드 승자 확정"}
-                              </p>
-                              <p className="mt-2 text-sm leading-6 text-white/75">
-                                {view.round_winner_ids.length > 0
-                                  ? view.round_winner_ids
-                                    .map((winnerId) => playerMap[winnerId]?.nickname_snapshot ?? "플레이어")
-                                    .join(", ")
-                                  : "라운드 승자 정보 없음"}
-                              </p>
-                              <p className="mt-2 text-xs text-white/55">
-                                {getLlRoundEndReasonLabel(view.end_reason)}
-                              </p>
-                              {Object.keys(view.tiebreak_sums).length > 0 && (
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  {Object.entries(view.tiebreak_sums).map(([playerId, sum]) => (
-                                    <span
-                                      key={`${playerId}-sum`}
-                                      className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/75"
-                                    >
-                                      {(playerMap[playerId]?.nickname_snapshot ?? "플레이어")} 공개 카드 합 {sum}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                              {canAdvanceRound && (
-                                <button
-                                  type="button"
-                                  onClick={() => void advanceToNextRound()}
-                                  disabled={loading}
-                                  className="mt-4 rounded-full bg-[#d95b5f] px-4 py-2 text-sm font-black text-white disabled:opacity-45"
-                                >
-                                  다음 라운드
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="relative h-[660px] overflow-hidden rounded-[1.5rem] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.12),transparent_25%),linear-gradient(180deg,rgba(46,14,33,0.85),rgba(20,8,17,0.92))]">
-                          <div className="absolute inset-6 rounded-[1.75rem] border border-white/10 bg-[radial-gradient(circle_at_center,rgba(255,235,215,0.06),transparent_42%),linear-gradient(180deg,rgba(18,9,17,0.15),rgba(18,9,17,0.05))]" />
-
-                          {seatPlacements.map((placement) => {
-                            const player = playerMap[placement.playerId];
-                            if (!player) return null;
-                            const isSelf = placement.isSelf;
-                            const visibleHand = getLlVisibleHand(view, player.player_id, isSelf);
-                            const handCount = isSelf ? myHand.length : getLlCurrentHandCount(view, player.player_id);
-                            const discardPile = view.discard_piles[player.player_id] ?? [];
-                            const selectable = Boolean(
-                              myTurn &&
-                              selectedCard &&
-                              validTargetIds.includes(player.player_id) &&
-                              player.player_id !== userId
-                            );
-
-                            return (
-                              <div
-                                key={player.player_id}
-                                className={`absolute z-10 ${isSelf ? "w-[min(320px,86vw)]" : "w-[min(280px,78vw)]"}`}
-                                style={placement.style}
-                              >
-                                <PlayerSeatCard
-                                  player={player}
-                                  isHost={room.host_id === player.player_id}
-                                  isTurnPlayer={view.current_turn_player_id === player.player_id}
-                                  isStarter={view.starter_player_id === player.player_id}
-                                  isProtected={protectedSet.has(player.player_id)}
-                                  isEliminated={eliminatedSet.has(player.player_id)}
-                                  isRoundWinner={roundWinnerSet.has(player.player_id)}
-                                  isMatchWinner={matchWinnerSet.has(player.player_id)}
-                                  tokenGoal={tokenGoal}
-                                  handCount={handCount}
-                                  visibleHand={canSeeAllHands || isSelf ? visibleHand : []}
-                                  discardPile={discardPile}
-                                  selectable={selectable}
-                                  selected={selectedTargetId === player.player_id}
-                                  onSelect={selectable ? () => setSelectedTargetId(player.player_id) : undefined}
-                                />
-                              </div>
-                            );
-                          })}
-
-                          {view.spectator_mode && (
-                            <div className="absolute inset-x-6 top-6 z-20 rounded-full border border-cyan-200/20 bg-cyan-300/10 px-4 py-3 text-center text-sm font-bold text-cyan-50">
-                              라운드 종료까지 관전 중입니다. 남아 있는 플레이어 손패를 공개합니다.
-                            </div>
-                          )}
-                        </div>
+                        )}
                       </div>
                     </div>
 
@@ -1765,17 +1833,22 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                       </div>
 
                       <div className="mt-6 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
-                        <div className="grid gap-4 md:grid-cols-2">
+                        <div className="flex gap-4 overflow-x-auto pb-2">
                           {myHand.length > 0 ? (
                             myHand.map((cardId, index) => (
-                              <LoveLetterCardFace
+                              <div
                                 key={`${cardId}-${index}-${index === 0 ? "first" : "second"}`}
-                                cardId={cardId}
-                                selected={selectedCardId === cardId}
-                                emphasis={myTurn && selectedCardId !== cardId}
-                                disabled={!myTurn || pendingBroadcaster || loading}
-                                onClick={myTurn ? () => setSelectedCardId(cardId) : undefined}
-                              />
+                                className="w-[min(240px,72vw)] shrink-0"
+                              >
+                                <LoveLetterCardFace
+                                  cardId={cardId}
+                                  imageOnly
+                                  selected={selectedCardId === cardId}
+                                  emphasis={myTurn && selectedCardId !== cardId}
+                                  disabled={!myTurn || pendingBroadcaster || loading}
+                                  onClick={myTurn ? () => setSelectedCardId(cardId) : undefined}
+                                />
+                              </div>
                             ))
                           ) : (
                             <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/5 p-6 text-sm text-white/55">
