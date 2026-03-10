@@ -371,17 +371,17 @@ function PlayerSeatCard({
   onSelect?: () => void;
 }) {
   const cardClassName = `w-full rounded-[1.6rem] border p-4 text-left shadow-xl backdrop-blur-xl transition ${isEliminated
-        ? "border-rose-400/20 bg-[#251015]/70 grayscale"
-        : isMatchWinner
-          ? "border-amber-200/65 bg-[#251712]/82 shadow-[0_0_36px_rgba(251,191,36,0.18)]"
-          : isRoundWinner
-            ? "border-yellow-100/60 bg-[#1f121b]/82 shadow-[0_0_28px_rgba(253,224,71,0.14)]"
-            : selected
-              ? "border-white/85 bg-[#26131f]/88 shadow-[0_0_28px_rgba(255,255,255,0.14)]"
-              : selectable
-                ? "border-cyan-100/45 bg-[#1f1320]/86 hover:-translate-y-1 hover:border-cyan-100/85"
-                : "border-white/10 bg-[#1d111c]/84"
-        }`;
+    ? "border-rose-400/20 bg-[#251015]/70 grayscale"
+    : isMatchWinner
+      ? "border-amber-200/65 bg-[#251712]/82 shadow-[0_0_36px_rgba(251,191,36,0.18)]"
+      : isRoundWinner
+        ? "border-yellow-100/60 bg-[#1f121b]/82 shadow-[0_0_28px_rgba(253,224,71,0.14)]"
+        : selected
+          ? "border-white/85 bg-[#26131f]/88 shadow-[0_0_28px_rgba(255,255,255,0.14)]"
+          : selectable
+            ? "border-cyan-100/45 bg-[#1f1320]/86 hover:-translate-y-1 hover:border-cyan-100/85"
+            : "border-white/10 bg-[#1d111c]/84"
+    }`;
 
   const cardBody = (
     <>
@@ -615,9 +615,9 @@ function BroadcasterModal({
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f6ddd6]/60">Broadcaster</p>
-              <h3 className="mt-2 text-xl font-black text-white sm:text-2xl">남길 카드와 덱 아래 순서를 선택하세요</h3>
+              <h3 className="mt-2 text-xl font-black text-white sm:text-2xl">방송부장 [대본 수정]</h3>
               <p className="mt-3 text-sm leading-6 text-white/75">
-                남길 카드 1장을 먼저 고르고, 나머지 카드는 고르는 순서대로 덱 맨 아래로 들어갑니다.
+                남길 카드 1장을 먼저 고르고, 나머지 카드들의 덱 맨 아래로 들어갈 순서를 정해주세요.
               </p>
             </div>
             <button
@@ -899,17 +899,17 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     ? ""
     : view.round_phase === "round_reveal"
       ? "라운드 결과 공개"
-    : view.round_phase === "await_next_round"
-      ? view.round_winner_ids.length > 1
-        ? "공동 라운드 승리"
-        : "라운드 결과 공개"
-      : view.round_phase === "match_finished"
-        ? "매치 결과 확정"
-      : view.round_phase === "await_broadcaster_resolution" && view.current_turn_player_id === userId
-        ? "방송부장 정리"
-      : view.current_turn_player_id
-        ? `${playerMap[view.current_turn_player_id]?.nickname_snapshot ?? "플레이어"} 차례`
-      : "진행 상황";
+      : view.round_phase === "await_next_round"
+        ? view.round_winner_ids.length > 1
+          ? "공동 라운드 승리"
+          : "라운드 결과 공개"
+        : view.round_phase === "match_finished"
+          ? "매치 결과 확정"
+          : view.round_phase === "await_broadcaster_resolution" && view.current_turn_player_id === userId
+            ? "방송부장 정리"
+            : view.current_turn_player_id
+              ? `${playerMap[view.current_turn_player_id]?.nickname_snapshot ?? "플레이어"} 차례`
+              : "진행 상황";
   const hideCenterNoteDetail = Boolean(
     view &&
     (view.round_phase === "round_reveal" || view.round_phase === "await_next_round" || view.round_phase === "match_finished")
@@ -1427,9 +1427,9 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
               <p className="text-xs font-bold uppercase tracking-[0.42em] text-[#f7d9d1]/65">Love Letter</p>
               <h1 className="mt-3 text-4xl font-black tracking-tight text-white md:text-5xl">러브 레터</h1>
               <p className="mt-4 max-w-2xl text-sm leading-6 text-white/70 md:text-base">
-                누가 짝사랑의 곁에 있는지, 눈빛 하나로 추리하는 1분간의 사투.
+                누가 짝사랑의 곁에 있는지, 끊임없이 추리하는 게임.
                 <br />
-                21장의 카드 속, 공주에게 닿을 유일한 승자는 누구인가.
+                21장의 카드 속, 짝사랑에게 닿을 유일한 승자는 누구인가.
               </p>
             </div>
 

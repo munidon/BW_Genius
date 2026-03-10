@@ -34,7 +34,7 @@ export const BOARD_GAMES: BoardGameEntry[] = [
     description: "2~4인 실시간 카드 테이블. 지목, 비교, 교환, 보호를 엮어 비밀 폴라로이드 토큰을 먼저 모아보세요!",
     href: "/games/love-letter",
     available: true,
-    imageSrc: "/images/love_letters/characters/president.png",
+    imageSrc: "/images/love_letters/landing.png",
   },
   {
     slug: "coming-soon-02",
