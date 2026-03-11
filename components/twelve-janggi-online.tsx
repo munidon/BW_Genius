@@ -1517,7 +1517,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                               disabled={!interactive}
                               whileHover={interactive ? { y: -2 } : undefined}
                               whileTap={interactive ? { scale: 0.98 } : undefined}
-                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-1 text-left transition sm:p-1.5 md:p-2 ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
+                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-0 text-left transition ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
                                 } ${isSelectedCell
                                   ? "border-white/80 ring-2 ring-white shadow-[0_0_0_1px_rgba(255,255,255,0.4)]"
                                   : isMoveTarget || isDropTarget
@@ -1534,11 +1534,13 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                               )}
 
                               {piece ? (
-                                <PieceToken
-                                  piece={piece}
-                                  viewerOwner={myOwner}
-                                  emphasized={isSelectedCell || isLastTo}
-                                />
+                                <div className="absolute inset-[2px] sm:inset-[3px]">
+                                  <PieceToken
+                                    piece={piece}
+                                    viewerOwner={myOwner}
+                                    emphasized={isSelectedCell || isLastTo}
+                                  />
+                                </div>
                               ) : (
                                 <div className="flex h-full items-center justify-center text-emerald-50/12">•</div>
                               )}
