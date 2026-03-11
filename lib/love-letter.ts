@@ -78,6 +78,19 @@ export interface LlPrivateResult {
   options?: LlCardId[];
 }
 
+export interface LlServerEventRow {
+  id: number;
+  room_id: string;
+  round_number: number;
+  player_id: string;
+  event_type: string;
+  title: string;
+  message: string;
+  detail: string | null;
+  payload: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface LlPendingInput {
   kind: "none" | "resolve_broadcaster";
   pending_card_id: LlCardId | null;
@@ -107,6 +120,7 @@ export interface LlRoomView {
   match_winner_ids: string[];
   tiebreak_sums: Record<string, number>;
   visible_hands: Record<string, LlCardId[]>;
+  server_events: LlServerEventRow[];
   recent_private_message: string | null;
   end_reason: string | null;
   logs: LlActionLogRow[];
@@ -153,6 +167,7 @@ const EMPTY_VIEW: LlRoomView = {
   match_winner_ids: [],
   tiebreak_sums: {},
   visible_hands: {},
+  server_events: [],
   recent_private_message: null,
   end_reason: null,
   logs: [],
@@ -334,8 +349,8 @@ export const LOVE_LETTER_RULE_SUMMARY = [
     body: "한 명만 남거나 덱이 바닥나면 종료되고, 손패 숫자와 공개 카드 합으로 승자를 정합니다.",
   },
   {
-    title: "핵심 변수",
-    body: "보호, 강제 버림, 손패 교환, 지목, 관전자 공개가 동시에 돌아가는 다인용 실시간 카드전입니다.",
+    title: "대기실 시작",
+    body: "호스트는 준비하지 않고, 정원이 찬 뒤 비호스트 참가자가 모두 준비되면 게임을 시작합니다.",
   },
 ];
 
@@ -374,13 +389,64 @@ export function getLoveLetterPhaseLabel(phase: LlRoundPhase): string {
   return "매치 종료";
 }
 
+function withLoveLetterRawServerError(message: string, raw: string): string {
+  return `${message}\n원문: ${raw}`;
+}
+
 export function formatLoveLetterError(raw: string, code?: string): string {
   const normalized = raw.trim().toUpperCase();
-  if (code === "PGRST202" || raw.toLowerCase().includes("does not exist")) {
-    return "러브레터용 Supabase 함수가 없습니다. 최신 ll-schema.sql을 먼저 적용해 주세요.";
+  const lower = raw.toLowerCase();
+  if (
+    raw.includes("ll_append_player_event") ||
+    raw.includes("ll_get_player_events_jsonb") ||
+    raw.includes("ll_player_events")
+  ) {
+    return withLoveLetterRawServerError(
+      "플레이어별 서버 메세지용 SQL이 빠져 있습니다. ll-broadcaster-rpc-hotfix.sql 또는 최신 ll-schema.sql을 다시 적용해 주세요.",
+      raw
+    );
+  }
+  if ((code === "PGRST202" || lower.includes("does not exist")) && raw.includes("ll_append_action_log")) {
+    return withLoveLetterRawServerError(
+      "러브레터 액션 로그 함수 시그니처가 오래된 상태입니다. 최신 ll-schema.sql 또는 ll-broadcaster-rpc-hotfix.sql을 다시 적용해 주세요.",
+      raw
+    );
+  }
+  if ((code === "PGRST202" || lower.includes("does not exist")) && raw.includes("ll_get_room_view")) {
+    return withLoveLetterRawServerError(
+      "러브레터 방 조회 SQL이 오래된 상태입니다. 최신 ll-schema.sql 또는 ll-broadcaster-rpc-hotfix.sql을 다시 적용해 주세요.",
+      raw
+    );
+  }
+  if (
+    (code === "PGRST202" || lower.includes("does not exist")) &&
+    (raw.includes("ll_advance_turn_after_action") || raw.includes("ll_finish_round"))
+  ) {
+    return withLoveLetterRawServerError(
+      "러브레터 턴 진행 SQL이 오래된 상태입니다. 최신 ll-schema.sql을 다시 적용해 주세요.",
+      raw
+    );
+  }
+  if ((code === "PGRST202" || lower.includes("does not exist")) && raw.includes("ll_resolve_broadcaster")) {
+    return withLoveLetterRawServerError(
+      "방송부장 정리 함수 시그니처가 오래된 상태입니다. 최신 ll-schema.sql을 다시 적용해 주세요.",
+      raw
+    );
+  }
+  if (code === "PGRST202" || lower.includes("could not find the function public.ll_")) {
+    return withLoveLetterRawServerError(
+      "러브레터용 Supabase 함수가 없습니다. 최신 ll-schema.sql을 먼저 적용해 주세요.",
+      raw
+    );
+  }
+  if (lower.includes("does not exist")) {
+    return withLoveLetterRawServerError("러브레터 SQL 내부 참조가 어긋났습니다.", raw);
   }
   if (normalized.includes("STATEMENT TIMEOUT") || normalized.includes("CANCELING STATEMENT DUE TO STATEMENT TIMEOUT")) {
-    return "러브레터 방 조회가 타임아웃되었습니다. Supabase에 최신 ll-schema.sql 또는 ll-room-membership-hotfix.sql을 적용해 주세요.";
+    return withLoveLetterRawServerError(
+      "러브레터 방 조회가 타임아웃되었습니다. Supabase에 최신 ll-schema.sql 또는 ll-room-membership-hotfix.sql을 적용해 주세요.",
+      raw
+    );
   }
   if (normalized.includes("INVALID_PLAYER_LIMIT")) return "인원수는 2인, 3인, 4인 중 하나만 선택할 수 있습니다.";
   if (normalized.includes("ROOM_NOT_FOUND")) return "방을 찾을 수 없습니다.";
@@ -391,7 +457,8 @@ export function formatLoveLetterError(raw: string, code?: string): string {
   if (normalized.includes("PLAYER_ALREADY_JOINED")) return "이미 입장한 방입니다.";
   if (normalized.includes("PLAYER_NOT_IN_ROOM")) return "방 참가자가 아닙니다.";
   if (normalized.includes("PLAYER_LIMIT_NOT_MET")) return "선택한 정원만큼 참가자가 모여야 시작할 수 있습니다.";
-  if (normalized.includes("PLAYERS_NOT_READY")) return "모든 참가자가 준비를 완료해야 시작할 수 있습니다.";
+  if (normalized.includes("PLAYERS_NOT_READY")) return "호스트를 제외한 모든 참가자가 준비를 완료해야 시작할 수 있습니다.";
+  if (normalized.includes("HOST_READY_NOT_REQUIRED")) return "호스트는 준비할 필요가 없습니다.";
   if (normalized.includes("ONLY_HOST_CAN_START")) return "호스트만 게임을 시작할 수 있습니다.";
   if (normalized.includes("ONLY_HOST_CAN_ADVANCE")) return "호스트만 다음 라운드를 시작할 수 있습니다.";
   if (normalized.includes("NOT_YOUR_TURN")) return "현재 당신의 턴이 아닙니다.";
@@ -469,6 +536,42 @@ function normalizeLlLogs(value: unknown): LlActionLogRow[] {
       card_id: normalizeLlCardId(row.card_id),
       guessed_card: normalizeLlCardId(row.guessed_card),
       public_message: typeof row.public_message === "string" ? row.public_message : "",
+      payload,
+      created_at: typeof row.created_at === "string" ? row.created_at : new Date(0).toISOString(),
+    }];
+  });
+}
+
+function normalizeLlServerEvents(value: unknown): LlServerEventRow[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const row = entry as Record<string, unknown>;
+    const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+      ? (row.payload as Record<string, unknown>)
+      : null;
+
+    if (
+      typeof row.id !== "number" ||
+      typeof row.room_id !== "string" ||
+      typeof row.player_id !== "string" ||
+      typeof row.event_type !== "string" ||
+      typeof row.title !== "string" ||
+      typeof row.message !== "string"
+    ) {
+      return [];
+    }
+
+    return [{
+      id: row.id,
+      room_id: row.room_id,
+      round_number: typeof row.round_number === "number" ? row.round_number : 0,
+      player_id: row.player_id,
+      event_type: row.event_type,
+      title: row.title,
+      message: row.message,
+      detail: typeof row.detail === "string" ? row.detail : null,
       payload,
       created_at: typeof row.created_at === "string" ? row.created_at : new Date(0).toISOString(),
     }];
@@ -598,6 +701,7 @@ export function normalizeLlRoomView(value: unknown): LlRoomView {
     match_winner_ids: normalizeLlStringArray(row.match_winner_ids),
     tiebreak_sums: normalizeLlStringNumberRecord(row.tiebreak_sums),
     visible_hands: normalizeLlHandMap(row.visible_hands),
+    server_events: normalizeLlServerEvents(row.server_events),
     recent_private_message: typeof row.recent_private_message === "string" ? row.recent_private_message : null,
     end_reason: typeof row.end_reason === "string" ? row.end_reason : null,
     logs: normalizeLlLogs(row.logs),
@@ -638,6 +742,11 @@ export function resolveLlRpcEnvelope(value: unknown): {
     view: maybeView,
     privateResult: maybePrivate,
   };
+}
+
+export function getLlPrivateResultFromServerEvent(event: LlServerEventRow | null | undefined): LlPrivateResult | null {
+  if (!event?.payload) return null;
+  return normalizeLlPrivateResult(event.payload);
 }
 
 export function getLlPublicDiscardSum(cards: LlCardId[]): number {

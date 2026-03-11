@@ -82,6 +82,19 @@ create table if not exists public.ll_action_logs (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.ll_player_events (
+  id bigint generated always as identity primary key,
+  room_id uuid not null references public.ll_rooms(id) on delete cascade,
+  round_number int not null default 0,
+  player_id uuid not null references auth.users(id) on delete cascade,
+  event_type text not null,
+  title text not null,
+  message text not null,
+  detail text,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.ll_player_stats (
   player_id uuid primary key references auth.users(id) on delete cascade,
   matches_played int not null default 0 check (matches_played >= 0),
@@ -95,6 +108,7 @@ create index if not exists idx_ll_rooms_room_code on public.ll_rooms(room_code);
 create index if not exists idx_ll_rooms_status on public.ll_rooms(status, updated_at desc);
 create index if not exists idx_ll_room_players_player on public.ll_room_players(player_id, joined_at desc);
 create index if not exists idx_ll_action_logs_room on public.ll_action_logs(room_id, created_at desc);
+create index if not exists idx_ll_player_events_room_player on public.ll_player_events(room_id, player_id, created_at desc);
 
 do $$
 begin
@@ -370,6 +384,102 @@ as $$
   );
 $$;
 
+create or replace function public.ll_append_player_event(
+  p_room_id uuid,
+  p_round_number int,
+  p_player_id uuid,
+  p_event_type text,
+  p_title text,
+  p_message text,
+  p_detail text default null,
+  p_payload jsonb default '{}'::jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.ll_player_events (
+    room_id,
+    round_number,
+    player_id,
+    event_type,
+    title,
+    message,
+    detail,
+    payload
+  )
+  values (
+    p_room_id,
+    coalesce(p_round_number, 0),
+    p_player_id,
+    p_event_type,
+    coalesce(p_title, '서버 메세지'),
+    coalesce(p_message, ''),
+    p_detail,
+    coalesce(p_payload, '{}'::jsonb)
+  );
+exception
+  when undefined_table or undefined_column then
+    return;
+end;
+$$;
+
+create or replace function public.ll_get_player_events_jsonb(
+  p_room_id uuid,
+  p_player_id uuid,
+  p_limit int default 8
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  events jsonb := '[]'::jsonb;
+begin
+  select coalesce(
+    jsonb_agg(to_jsonb(event_item) order by event_item.created_at desc, event_item.id desc),
+    '[]'::jsonb
+  )
+  into events
+  from (
+    select *
+    from public.ll_player_events
+    where room_id = p_room_id
+      and player_id = p_player_id
+    order by created_at desc, id desc
+    limit greatest(coalesce(p_limit, 8), 0)
+  ) event_item;
+
+  return events;
+exception
+  when undefined_table or undefined_column then
+    return '[]'::jsonb;
+end;
+$$;
+
+create or replace function public.ll_card_name(p_card_id smallint)
+returns text
+language sql
+immutable
+as $$
+  select case p_card_id
+    when 0 then '전학생'
+    when 1 then '선도부원'
+    when 2 then '상담 선생님'
+    when 3 then '운동부 에이스'
+    when 4 then '도서부원'
+    when 5 then '전교 부회장'
+    when 6 then '방송부장'
+    when 7 then '전교 회장'
+    when 8 then '전교 1등'
+    when 9 then '짝사랑'
+    else '알 수 없는 카드'
+  end;
+$$;
+
 create or replace function public.ll_apply_scholar_constraint(
   p_hands jsonb,
   p_discard_piles jsonb,
@@ -540,11 +650,13 @@ declare
   active_players uuid[];
   deal_player_id uuid;
   starter_player uuid;
+  starter_nickname text;
   next_hands jsonb := '{}'::jsonb;
   next_discards jsonb := '{}'::jsonb;
   draw_card smallint;
   deck_cursor int := 1;
   round_state public.ll_round_states;
+  viewer_row record;
 begin
   select * into room_row
   from public.ll_rooms
@@ -662,6 +774,33 @@ begin
     format('%s 라운드가 시작되었습니다.', p_round_number),
     jsonb_build_object('starter_player_id', starter_player)
   );
+
+  select rp.nickname_snapshot into starter_nickname
+  from public.ll_room_players rp
+  where rp.room_id = p_room_id
+    and rp.player_id = starter_player;
+
+  for viewer_row in
+    select player_id
+    from public.ll_room_players
+    where room_id = p_room_id
+      and left_at is null
+    order by seat_index
+  loop
+    perform public.ll_append_player_event(
+      p_room_id,
+      p_round_number,
+      viewer_row.player_id,
+      'round_started',
+      '라운드 시작',
+      case
+        when viewer_row.player_id = starter_player then
+          format('%s 라운드가 시작되었습니다. 당신이 먼저 시작합니다.', p_round_number)
+        else
+          format('%s 라운드가 시작되었습니다. %s님이 먼저 시작합니다.', p_round_number, coalesce(starter_nickname, '플레이어'))
+      end
+    );
+  end loop;
 
   return round_state;
 end;
@@ -821,6 +960,9 @@ declare
   newbie_bonus_player_id uuid;
   final_winners uuid[];
   next_starter uuid;
+  winner_names text;
+  final_winner_names text;
+  viewer_row record;
 begin
   select * into room_row
   from public.ll_rooms
@@ -1002,6 +1144,63 @@ begin
       'newbie_bonus_player_id', newbie_bonus_player_id
     )
   );
+
+  select coalesce(string_agg(nickname_snapshot, ', ' order by seat_index), '없음')
+  into winner_names
+  from public.ll_room_players
+  where room_id = p_room_id
+    and player_id = any(coalesce(winner_ids, '{}'::uuid[]));
+
+  select coalesce(string_agg(nickname_snapshot, ', ' order by seat_index), '없음')
+  into final_winner_names
+  from public.ll_room_players
+  where room_id = p_room_id
+    and player_id = any(coalesce(final_winners, '{}'::uuid[]));
+
+  for viewer_row in
+    select player_id
+    from public.ll_room_players
+    where room_id = p_room_id
+      and left_at is null
+    order by seat_index
+  loop
+    perform public.ll_append_player_event(
+      p_room_id,
+      round_row.round_number,
+      viewer_row.player_id,
+      case when coalesce(array_length(final_winners, 1), 0) > 0 then 'match_finished' else 'round_finished' end,
+      case when coalesce(array_length(final_winners, 1), 0) > 0 then '매치 종료' else '라운드 종료' end,
+      case
+        when coalesce(array_length(final_winners, 1), 0) > 0 and viewer_row.player_id = any(final_winners) then
+          '당신이 최종 승자로 확정되었습니다.'
+        when coalesce(array_length(final_winners, 1), 0) > 0 then
+          format('매치가 종료되었습니다. 최종 승자: %s', final_winner_names)
+        when viewer_row.player_id = any(winner_ids) and coalesce(array_length(winner_ids, 1), 0) = 1 then
+          '당신이 이번 라운드에서 승리했습니다.'
+        when viewer_row.player_id = any(winner_ids) then
+          format('이번 라운드는 공동 승리입니다. 승자: %s', winner_names)
+        else
+          format('%s 라운드가 종료되었습니다. 승자: %s', round_row.round_number, winner_names)
+      end,
+      case
+        when newbie_bonus_player_id = viewer_row.player_id then '전학생 보너스로 비밀 폴라로이드 1개를 추가로 받았습니다.'
+        when newbie_bonus_player_id is not null then
+          format(
+            '%s님이 전학생 보너스를 받았습니다.',
+            coalesce(
+              (
+                select nickname_snapshot
+                from public.ll_room_players
+                where room_id = p_room_id
+                  and player_id = newbie_bonus_player_id
+              ),
+              '플레이어'
+            )
+          )
+        else null
+      end
+    );
+  end loop;
 end;
 $$;
 
@@ -1014,11 +1213,13 @@ as $$
 declare
   round_row public.ll_round_states;
   next_player_id uuid;
+  next_player_nickname text;
   next_hands jsonb;
   next_discards jsonb;
   next_deck smallint[];
   draw_card smallint;
   scholar_result jsonb;
+  viewer_row record;
 begin
   select * into round_row
   from public.ll_round_states
@@ -1056,19 +1257,46 @@ begin
   next_discards := scholar_result -> 'discard_piles';
 
   if coalesce((scholar_result ->> 'scholar_forced')::boolean, false) then
+    select nickname_snapshot into next_player_nickname
+    from public.ll_room_players
+    where room_id = p_room_id
+      and player_id = next_player_id;
+
     perform public.ll_append_action_log(
       p_room_id,
       round_row.round_number,
       'scholar_forced',
       next_player_id,
-      (select nickname_snapshot from public.ll_room_players where room_id = p_room_id and player_id = next_player_id),
+      next_player_nickname,
       null,
       null,
-      8,
+      8::smallint,
       null,
-      format('%s님의 전교 1등이 자동 공개되었습니다.', (select nickname_snapshot from public.ll_room_players where room_id = p_room_id and player_id = next_player_id)),
+      format('%s님의 전교 1등이 자동 공개되었습니다.', next_player_nickname),
       '{}'::jsonb
     );
+
+    for viewer_row in
+      select player_id
+      from public.ll_room_players
+      where room_id = p_room_id
+        and left_at is null
+      order by seat_index
+    loop
+      perform public.ll_append_player_event(
+        p_room_id,
+        round_row.round_number,
+        viewer_row.player_id,
+        'scholar_forced',
+        '전교 1등',
+        case
+          when viewer_row.player_id = next_player_id then
+            '전교 1등과 회장 계열 카드를 함께 들고 있어 전교 1등이 자동 공개되었습니다.'
+          else
+            format('%s님의 전교 1등이 자동 공개되었습니다.', coalesce(next_player_nickname, '플레이어'))
+        end
+      );
+    end loop;
   end if;
 
   update public.ll_round_states
@@ -1276,6 +1504,10 @@ begin
     raise exception 'ROOM_NOT_WAITING';
   end if;
 
+  if room_row.host_id = auth.uid() then
+    raise exception 'HOST_READY_NOT_REQUIRED';
+  end if;
+
   update public.ll_room_players
   set
     ready = p_ready,
@@ -1301,6 +1533,7 @@ as $$
 declare
   room_row public.ll_rooms;
   joined_count int;
+  ready_required_count int;
   ready_count int;
 begin
   select * into room_row
@@ -1320,8 +1553,11 @@ begin
     raise exception 'ROOM_ALREADY_STARTED';
   end if;
 
-  select count(*), count(*) filter (where ready)
-  into joined_count, ready_count
+  select
+    count(*),
+    count(*) filter (where player_id <> room_row.host_id),
+    count(*) filter (where player_id <> room_row.host_id and ready)
+  into joined_count, ready_required_count, ready_count
   from public.ll_room_players
   where room_id = p_room_id
     and left_at is null;
@@ -1330,7 +1566,7 @@ begin
     raise exception 'PLAYER_LIMIT_NOT_MET';
   end if;
 
-  if ready_count <> joined_count then
+  if ready_count <> ready_required_count then
     raise exception 'PLAYERS_NOT_READY';
   end if;
 
@@ -1365,6 +1601,7 @@ declare
   visible_hands jsonb := '{}'::jsonb;
   hand_counts jsonb := '{}'::jsonb;
   logs jsonb := '[]'::jsonb;
+  server_events jsonb := '[]'::jsonb;
   pending_input jsonb := '{}'::jsonb;
 begin
   if current_user_id is null then
@@ -1403,6 +1640,8 @@ begin
       limit 20
     ) log_item;
 
+    server_events := public.ll_get_player_events_jsonb(p_room_id, current_user_id, 8);
+
     return jsonb_build_object(
       'room_id', p_room_id,
       'round_number', room_row.current_round,
@@ -1424,6 +1663,7 @@ begin
       'match_winner_ids', to_jsonb(room_row.final_winner_ids),
       'tiebreak_sums', '{}'::jsonb,
       'visible_hands', '{}'::jsonb,
+      'server_events', server_events,
       'recent_private_message', null,
       'end_reason', null,
       'logs', logs,
@@ -1469,6 +1709,8 @@ begin
     limit 30
   ) log_item;
 
+  server_events := public.ll_get_player_events_jsonb(p_room_id, current_user_id, 8);
+
   return jsonb_build_object(
     'room_id', p_room_id,
     'round_number', round_row.round_number,
@@ -1496,6 +1738,7 @@ begin
     ),
     'tiebreak_sums', round_row.tiebreak_sums,
     'visible_hands', visible_hands,
+    'server_events', server_events,
     'recent_private_message', null,
     'end_reason', round_row.end_reason,
     'logs', logs,
@@ -1534,6 +1777,15 @@ declare
   next_deck smallint[];
   actor_card smallint;
   target_card smallint;
+  public_action_message text := '';
+  viewer_row record;
+  viewer_title text := '서버 메세지';
+  viewer_message text := '';
+  viewer_detail text := null;
+  viewer_payload jsonb := '{}'::jsonb;
+  monitor_correct boolean := false;
+  athlete_loser_player_id uuid := null;
+  vice_target_eliminated boolean := false;
 begin
   if actor_id is null then
     raise exception 'UNAUTHORIZED';
@@ -1627,7 +1879,8 @@ begin
         and player_id = p_target_player_id;
 
       target_hand := public.ll_card_map_get(round_row.hands, p_target_player_id);
-      if coalesce(target_hand[1], -1) = p_guessed_card then
+      monitor_correct := coalesce(target_hand[1], -1) = p_guessed_card;
+      if monitor_correct then
         helper_result := public.ll_eliminate_player(
           round_row.hands,
           round_row.discard_piles,
@@ -1753,6 +2006,11 @@ begin
           else null
         end
       );
+      athlete_loser_player_id := case
+        when actor_card < target_card then actor_id
+        when actor_card > target_card then p_target_player_id
+        else null
+      end;
     end if;
   elsif p_played_card = 4 then
     round_row.protected_player_ids := public.ll_uuid_array_add(round_row.protected_player_ids, actor_id);
@@ -1789,7 +2047,8 @@ begin
     target_discard := public.ll_card_map_get(round_row.discard_piles, p_target_player_id) || target_hand;
     round_row.discard_piles := public.ll_card_map_put(round_row.discard_piles, p_target_player_id, target_discard);
 
-    if coalesce(target_hand[1], -1) = 9 then
+    vice_target_eliminated := coalesce(target_hand[1], -1) = 9;
+    if vice_target_eliminated then
       helper_result := public.ll_eliminate_player(
         round_row.hands,
         round_row.discard_piles,
@@ -1843,13 +2102,6 @@ begin
       'pending_card_id', 6,
       'player_id', actor_id,
       'broadcaster_options', to_jsonb(remaining_options)
-    );
-
-    private_result := jsonb_build_object(
-      'type', 'broadcaster',
-      'title', '방송부장',
-      'message', '남길 카드 1장과 덱 아래 순서를 정해 주세요.',
-      'options', to_jsonb(remaining_options)
     );
   elsif p_played_card = 7 then
     valid_target_ids := coalesce(
@@ -1925,6 +2177,55 @@ begin
     updated_at = now()
   where room_id = p_room_id;
 
+  public_action_message := case
+    when p_played_card = 1 and p_target_player_id is null then
+      format('%s님이 선도부원을 공개했지만 지목할 대상이 없었습니다.', actor_nickname)
+    when p_played_card = 1 and monitor_correct then
+      format(
+        '%s님이 %s님의 카드를 %s(으)로 맞혀 즉시 탈락시켰습니다.',
+        actor_nickname,
+        target_nickname,
+        public.ll_card_name(p_guessed_card)
+      )
+    when p_played_card = 1 then
+      format(
+        '%s님이 %s님의 카드를 %s(으)로 추측했습니다.',
+        actor_nickname,
+        target_nickname,
+        public.ll_card_name(p_guessed_card)
+      )
+    when p_played_card = 2 and p_target_player_id is null then
+      format('%s님이 상담 선생님을 공개했지만 확인할 대상이 없었습니다.', actor_nickname)
+    when p_played_card = 2 then
+      format('%s님이 %s님의 카드를 확인했습니다.', actor_nickname, target_nickname)
+    when p_played_card = 3 and p_target_player_id is null then
+      format('%s님이 운동부 에이스를 공개했지만 비교할 대상이 없었습니다.', actor_nickname)
+    when p_played_card = 3 then
+      format('%s님과 %s님이 서로의 카드를 확인합니다.', actor_nickname, target_nickname)
+    when p_played_card = 4 then
+      format('%s님이 다음 차례 전까지 보호 상태가 됩니다.', actor_nickname)
+    when p_played_card = 5 and p_target_player_id = actor_id and vice_target_eliminated then
+      format('%s님이 자신의 카드를 버렸고 짝사랑이 공개되어 즉시 탈락했습니다.', actor_nickname)
+    when p_played_card = 5 and p_target_player_id = actor_id then
+      format('%s님이 자신의 카드를 버리고 새 카드를 뽑았습니다.', actor_nickname)
+    when p_played_card = 5 and vice_target_eliminated then
+      format('%s님이 %s님의 카드를 버리게 했고 짝사랑이 공개되어 즉시 탈락했습니다.', actor_nickname, target_nickname)
+    when p_played_card = 5 then
+      format('%s님이 %s님의 카드를 버리고 새 카드를 뽑게 했습니다.', actor_nickname, target_nickname)
+    when p_played_card = 6 then
+      format('%s님이 방송부장 효과로 카드 3장을 확인합니다.', actor_nickname)
+    when p_played_card = 7 and p_target_player_id is null then
+      format('%s님이 전교 회장을 공개했지만 교환할 대상이 없었습니다.', actor_nickname)
+    when p_played_card = 7 then
+      format('%s님이 %s님과 손패를 교환했습니다.', actor_nickname, target_nickname)
+    when p_played_card = 8 then
+      format('%s님이 전교 1등을 공개했습니다.', actor_nickname)
+    when p_played_card = 9 then
+      format('%s님이 짝사랑을 공개해 즉시 탈락했습니다.', actor_nickname)
+    else
+      format('%s님이 %s 카드를 공개했습니다.', actor_nickname, public.ll_card_name(p_played_card))
+  end;
+
   perform public.ll_append_action_log(
     p_room_id,
     round_row.round_number,
@@ -1935,9 +2236,175 @@ begin
     target_nickname,
     p_played_card,
     p_guessed_card,
-    format('%s님이 %s 카드를 공개했습니다.', actor_nickname, case when p_played_card between 0 and 9 then p_played_card::text else '알 수 없는' end),
+    public_action_message,
     jsonb_build_object('target_player_id', p_target_player_id)
   );
+
+  for viewer_row in
+    select player_id
+    from public.ll_room_players
+    where room_id = p_room_id
+      and left_at is null
+    order by seat_index
+  loop
+    viewer_title := public.ll_card_name(p_played_card);
+    viewer_message := public_action_message;
+    viewer_detail := null;
+    viewer_payload := '{}'::jsonb;
+
+    if p_played_card = 1 then
+      if p_target_player_id is null then
+        viewer_message := case
+          when viewer_row.player_id = actor_id then '지목할 대상이 없어 선도부원 효과가 넘어갔습니다.'
+          else format('%s님이 선도부원을 공개했지만 지목할 대상이 없었습니다.', actor_nickname)
+        end;
+      elsif viewer_row.player_id = actor_id then
+        viewer_message := case
+          when monitor_correct then format('%s님의 카드를 %s(으)로 맞혀 즉시 탈락시켰습니다.', target_nickname, public.ll_card_name(p_guessed_card))
+          else format('%s님의 카드를 %s(으)로 추측했지만 빗나갔습니다.', target_nickname, public.ll_card_name(p_guessed_card))
+        end;
+      elsif viewer_row.player_id = p_target_player_id then
+        viewer_message := case
+          when monitor_correct then format('%s님이 당신의 카드를 %s(으)로 맞혀 당신이 탈락했습니다.', actor_nickname, public.ll_card_name(p_guessed_card))
+          else format('%s님이 당신의 카드를 %s(으)로 추측했지만 빗나갔습니다.', actor_nickname, public.ll_card_name(p_guessed_card))
+        end;
+      else
+        viewer_message := case
+          when monitor_correct then format('%s님이 %s님의 카드를 %s(으)로 맞혀 즉시 탈락시켰습니다.', actor_nickname, target_nickname, public.ll_card_name(p_guessed_card))
+          else format('%s님이 %s님의 카드를 %s(으)로 추측했습니다.', actor_nickname, target_nickname, public.ll_card_name(p_guessed_card))
+        end;
+      end if;
+    elsif p_played_card = 2 then
+      if p_target_player_id is null then
+        viewer_message := case
+          when viewer_row.player_id = actor_id then '확인할 대상이 없어 상담 선생님 효과가 넘어갔습니다.'
+          else format('%s님이 상담 선생님을 공개했지만 확인할 대상이 없었습니다.', actor_nickname)
+        end;
+      elsif viewer_row.player_id = actor_id then
+        viewer_message := format('%s님의 카드를 확인했습니다.', target_nickname);
+        viewer_payload := jsonb_build_object(
+          'type', 'counselor',
+          'title', '상담 선생님',
+          'message', format('%s님의 카드를 확인했습니다.', target_nickname),
+          'card_id', target_hand[1]
+        );
+      elsif viewer_row.player_id = p_target_player_id then
+        viewer_message := format('%s님이 당신 카드를 확인합니다.', actor_nickname);
+      else
+        viewer_message := format('%s님이 %s님의 카드를 확인합니다.', actor_nickname, target_nickname);
+      end if;
+    elsif p_played_card = 3 then
+      if p_target_player_id is null then
+        viewer_message := case
+          when viewer_row.player_id = actor_id then '비교할 대상이 없어 운동부 에이스 효과가 넘어갔습니다.'
+          else format('%s님이 운동부 에이스를 공개했지만 비교할 대상이 없었습니다.', actor_nickname)
+        end;
+      elsif viewer_row.player_id = actor_id then
+        viewer_message := case
+          when athlete_loser_player_id = actor_id then format('%s님과 손패 숫자를 비교했고 내가 낮아 탈락했습니다.', target_nickname)
+          when athlete_loser_player_id = p_target_player_id then format('%s님과 손패 숫자를 비교했고 상대가 낮아 탈락했습니다.', target_nickname)
+          else format('%s님과 손패 숫자를 비교했지만 같은 숫자였습니다.', target_nickname)
+        end;
+        viewer_payload := jsonb_build_object(
+          'type', 'athlete',
+          'title', '운동부 에이스',
+          'message', format('%s님과 비공개 비교 결과를 확인했습니다.', target_nickname),
+          'actor_card_id', actor_card,
+          'target_card_id', target_card,
+          'loser_player_id', athlete_loser_player_id
+        );
+      elsif viewer_row.player_id = p_target_player_id then
+        viewer_message := case
+          when athlete_loser_player_id = p_target_player_id then format('%s님과 손패 숫자를 비교했고 내가 낮아 탈락했습니다.', actor_nickname)
+          when athlete_loser_player_id = actor_id then format('%s님과 손패 숫자를 비교했고 상대가 낮아 탈락했습니다.', actor_nickname)
+          else format('%s님과 손패 숫자를 비교했지만 같은 숫자였습니다.', actor_nickname)
+        end;
+        viewer_payload := jsonb_build_object(
+          'type', 'athlete',
+          'title', '운동부 에이스',
+          'message', format('%s님과 비공개 비교 결과를 확인했습니다.', actor_nickname),
+          'actor_card_id', actor_card,
+          'target_card_id', target_card,
+          'loser_player_id', athlete_loser_player_id
+        );
+      else
+        viewer_message := format('%s님과 %s님이 서로의 카드를 확인합니다.', actor_nickname, target_nickname);
+      end if;
+    elsif p_played_card = 4 then
+      viewer_message := case
+        when viewer_row.player_id = actor_id then '다음 내 차례 전까지 보호 상태가 됩니다.'
+        else format('%s님이 다음 차례 전까지 보호 상태가 됩니다.', actor_nickname)
+      end;
+    elsif p_played_card = 5 then
+      if p_target_player_id = actor_id then
+        viewer_message := case
+          when viewer_row.player_id = actor_id and vice_target_eliminated then '자신의 카드를 버렸고 짝사랑이 공개되어 즉시 탈락했습니다.'
+          when viewer_row.player_id = actor_id then '자신의 카드를 버리고 새 카드를 뽑았습니다.'
+          when vice_target_eliminated then format('%s님이 자신의 카드를 버렸고 짝사랑이 공개되어 즉시 탈락했습니다.', actor_nickname)
+          else format('%s님이 자신의 카드를 버리고 새 카드를 뽑았습니다.', actor_nickname)
+        end;
+      else
+        viewer_message := case
+          when viewer_row.player_id = actor_id and vice_target_eliminated then
+            format('%s님의 카드를 버리게 했고 짝사랑이 공개되어 즉시 탈락했습니다.', target_nickname)
+          when viewer_row.player_id = actor_id then
+            format('%s님의 카드를 버리고 새 카드를 뽑게 했습니다.', target_nickname)
+          when viewer_row.player_id = p_target_player_id and vice_target_eliminated then
+            format('%s님이 당신의 카드를 버리게 했고 짝사랑이 공개되어 당신이 탈락했습니다.', actor_nickname)
+          when viewer_row.player_id = p_target_player_id then
+            format('%s님이 당신의 카드를 버리고 새 카드를 뽑게 했습니다.', actor_nickname)
+          when vice_target_eliminated then
+            format('%s님이 %s님의 카드를 버리게 했고 짝사랑이 공개되어 즉시 탈락했습니다.', actor_nickname, target_nickname)
+          else
+            format('%s님이 %s님의 카드를 버리고 새 카드를 뽑게 했습니다.', actor_nickname, target_nickname)
+        end;
+      end if;
+    elsif p_played_card = 6 then
+      viewer_message := case
+        when viewer_row.player_id = actor_id then '덱에서 카드를 더 확인했습니다. 남길 카드와 순서를 정해 주세요.'
+        else format('%s님이 방송부장 효과를 정리하고 있습니다.', actor_nickname)
+      end;
+    elsif p_played_card = 7 then
+      if p_target_player_id is null then
+        viewer_message := case
+          when viewer_row.player_id = actor_id then '교환할 대상이 없어 전교 회장 효과가 넘어갔습니다.'
+          else format('%s님이 전교 회장을 공개했지만 교환할 대상이 없었습니다.', actor_nickname)
+        end;
+      elsif viewer_row.player_id = actor_id then
+        viewer_message := format('%s님과 손패를 교환했습니다.', target_nickname);
+      elsif viewer_row.player_id = p_target_player_id then
+        viewer_message := format('%s님이 당신과 손패를 교환했습니다.', actor_nickname);
+      else
+        viewer_message := format('%s님이 %s님과 손패를 교환했습니다.', actor_nickname, target_nickname);
+      end if;
+    elsif p_played_card = 8 then
+      viewer_message := case
+        when viewer_row.player_id = actor_id then '전교 1등을 공개했습니다.'
+        else format('%s님이 전교 1등을 공개했습니다.', actor_nickname)
+      end;
+    elsif p_played_card = 9 then
+      viewer_message := case
+        when viewer_row.player_id = actor_id then '짝사랑이 공개되어 즉시 탈락했습니다.'
+        else format('%s님의 짝사랑이 공개되어 즉시 탈락했습니다.', actor_nickname)
+      end;
+    else
+      viewer_message := case
+        when viewer_row.player_id = actor_id then format('%s을(를) 공개했습니다.', public.ll_card_name(p_played_card))
+        else format('%s님이 %s을(를) 공개했습니다.', actor_nickname, public.ll_card_name(p_played_card))
+      end;
+    end if;
+
+    perform public.ll_append_player_event(
+      p_room_id,
+      round_row.round_number,
+      viewer_row.player_id,
+      'play_card',
+      viewer_title,
+      viewer_message,
+      viewer_detail,
+      viewer_payload
+    );
+  end loop;
 
   if p_played_card <> 6 then
     perform public.ll_advance_turn_after_action(p_room_id, actor_id);
@@ -1951,10 +2418,13 @@ begin
 end;
 $$;
 
+drop function if exists public.ll_resolve_broadcaster(uuid, smallint, smallint[]);
+drop function if exists public.ll_resolve_broadcaster(uuid, integer, integer[]);
+
 create or replace function public.ll_resolve_broadcaster(
   p_room_id uuid,
-  p_kept_card smallint,
-  p_bottom_order smallint[]
+  p_kept_card integer,
+  p_bottom_order integer[]
 )
 returns jsonb
 language plpgsql
@@ -1964,8 +2434,10 @@ as $$
 declare
   round_row public.ll_round_states;
   current_user_id uuid := auth.uid();
+  current_user_nickname text;
   options smallint[];
   remaining_cards smallint[];
+  normalized_bottom_order smallint[];
   next_hands jsonb;
   next_discards jsonb;
   helper_result jsonb;
@@ -2006,35 +2478,56 @@ begin
     raise exception 'CARD_NOT_IN_HAND';
   end if;
 
-  remaining_cards := public.ll_remove_first_card(options, p_kept_card);
-  if not public.ll_array_contains_same_cards(remaining_cards, p_bottom_order) then
+  remaining_cards := public.ll_remove_first_card(options, p_kept_card::smallint);
+  normalized_bottom_order := coalesce(
+    (
+      select array_agg(item::smallint order by ordinality)
+      from unnest(coalesce(p_bottom_order, '{}'::integer[])) with ordinality as bottom_items(item, ordinality)
+    ),
+    '{}'::smallint[]
+  );
+
+  if not public.ll_array_contains_same_cards(remaining_cards, normalized_bottom_order) then
     raise exception 'INVALID_TARGET';
   end if;
 
-  next_hands := public.ll_card_map_put(round_row.hands, current_user_id, array[p_kept_card]);
+  next_hands := public.ll_card_map_put(round_row.hands, current_user_id, array[p_kept_card::smallint]);
   next_discards := round_row.discard_piles;
   helper_result := public.ll_apply_scholar_constraint(next_hands, next_discards, current_user_id);
+
+  select nickname_snapshot into current_user_nickname
+  from public.ll_room_players
+  where room_id = p_room_id
+    and player_id = current_user_id;
 
   update public.ll_round_states
   set
     round_phase = 'await_turn',
-    deck_order = coalesce(deck_order, '{}'::smallint[]) || coalesce(p_bottom_order, '{}'::smallint[]),
+    deck_order = coalesce(deck_order, '{}'::smallint[]) || normalized_bottom_order,
     hands = helper_result -> 'hands',
     discard_piles = helper_result -> 'discard_piles',
     pending_input = '{}'::jsonb,
     updated_at = now()
   where room_id = p_room_id;
 
+  perform public.ll_append_action_log(
+    p_room_id,
+    round_row.round_number,
+    'resolve_broadcaster',
+    current_user_id,
+    current_user_nickname,
+    null,
+    null,
+    6::smallint,
+    null,
+    format('%s님이 방송부장 정리를 마쳤습니다.', current_user_nickname),
+    jsonb_build_object('kept_card', p_kept_card)
+  );
+
   perform public.ll_advance_turn_after_action(p_room_id, current_user_id);
 
   return jsonb_build_object(
-    'room', (select to_jsonb(r) from public.ll_rooms r where r.id = p_room_id),
-    'view', public.ll_get_room_view(p_room_id),
-    'private_result', jsonb_build_object(
-      'type', 'notice',
-      'title', '방송부장 정리 완료',
-      'message', '선택한 카드 1장을 손패로 남기고 나머지는 덱 아래로 보냈습니다.'
-    )
+    'room', (select to_jsonb(r) from public.ll_rooms r where r.id = p_room_id)
   );
 end;
 $$;
@@ -2281,6 +2774,7 @@ alter table public.ll_rooms enable row level security;
 alter table public.ll_room_players enable row level security;
 alter table public.ll_round_states enable row level security;
 alter table public.ll_action_logs enable row level security;
+alter table public.ll_player_events enable row level security;
 alter table public.ll_player_stats enable row level security;
 
 drop policy if exists "ll_rooms_select_member" on public.ll_rooms;
@@ -2331,6 +2825,19 @@ using (public.ll_is_room_member(room_id));
 drop policy if exists "ll_action_logs_block_direct_write" on public.ll_action_logs;
 create policy "ll_action_logs_block_direct_write"
 on public.ll_action_logs
+for all
+using (false)
+with check (false);
+
+drop policy if exists "ll_player_events_select_own" on public.ll_player_events;
+create policy "ll_player_events_select_own"
+on public.ll_player_events
+for select
+using (player_id = auth.uid());
+
+drop policy if exists "ll_player_events_block_direct_write" on public.ll_player_events;
+create policy "ll_player_events_block_direct_write"
+on public.ll_player_events
 for all
 using (false)
 with check (false);

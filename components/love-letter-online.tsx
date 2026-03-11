@@ -10,6 +10,7 @@ import {
   formatLoveLetterError,
   getLlCurrentHandCount,
   getLlDefaultValidTargetIds,
+  getLlPrivateResultFromServerEvent,
   getLlRoundEndReasonLabel,
   getLlSeatPlacements,
   getLlTurnNotice,
@@ -47,6 +48,7 @@ const EMPTY_RECORD: PlayerRecord = {
   matchWins: 0,
   roundWins: 0,
 };
+const EMPTY_LL_CARD_IDS: LlCardId[] = [];
 
 function RoundMetric({ label, value }: { label: string; value: string }) {
   return (
@@ -581,21 +583,23 @@ function LeaveConfirmModal({
 
 function BroadcasterModal({
   options,
+  keptOptionIndex,
   keptCardId,
   bottomOrder,
   onPickKept,
-  onMove,
+  onSwapOrder,
   onSubmit,
-  onClose,
+  errorText,
   loading,
 }: {
   options: LlCardId[];
+  keptOptionIndex: number | null;
   keptCardId: LlCardId | null;
   bottomOrder: LlCardId[];
-  onPickKept: (cardId: LlCardId) => void;
-  onMove: (index: number, direction: "left" | "right") => void;
+  onPickKept: (index: number) => void;
+  onSwapOrder: () => void;
   onSubmit: () => void;
-  onClose: () => void;
+  errorText?: string;
   loading: boolean;
 }) {
   return (
@@ -612,31 +616,27 @@ function BroadcasterModal({
           exit={{ opacity: 0, y: 20 }}
           className="mx-auto my-4 w-full max-w-4xl rounded-[2rem] border border-white/10 bg-[#130911]/95 p-4 shadow-2xl sm:p-6"
         >
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f6ddd6]/60">Broadcaster</p>
-              <h3 className="mt-2 text-xl font-black text-white sm:text-2xl">방송부장 [대본 수정]</h3>
-              <p className="mt-3 text-sm leading-6 text-white/75">
-                남길 카드 1장을 먼저 고르고, 나머지 카드들의 덱 맨 아래로 들어갈 순서를 정해주세요.
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f6ddd6]/60">Broadcaster</p>
+            <h3 className="mt-2 text-xl font-black text-white sm:text-2xl">방송부장 [대본 수정]</h3>
+            <p className="mt-3 text-sm leading-6 text-white/75">
+              남길 카드 1장을 먼저 고르고, 나머지 카드들의 덱 맨 아래로 들어갈 순서를 정해주세요.
+            </p>
+            {errorText && (
+              <p className="mt-3 rounded-2xl border border-[#ff9d8f]/20 bg-[#49171d]/60 px-3 py-2 text-sm text-[#ffe1dd]">
+                {errorText}
               </p>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="shrink-0 self-end rounded-full border border-white/10 px-3 py-1 text-sm font-bold text-white/80 sm:self-auto"
-            >
-              닫기
-            </button>
+            )}
           </div>
 
-          <div className="mt-6 flex gap-4 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 sm:overflow-visible sm:pb-0 lg:grid-cols-3">
+          <div className="mt-6 flex gap-4 overflow-x-auto pb-2">
             {options.map((cardId, index) => (
-              <div key={`${cardId}-${index}`} className="w-[min(220px,72vw)] shrink-0 sm:w-auto">
+              <div key={`${cardId}-${index}`} className="w-[min(220px,72vw)] max-w-[220px] shrink-0">
                 <LoveLetterCardFace
                   cardId={cardId}
                   imageOnly
-                  selected={keptCardId === cardId}
-                  onClick={() => onPickKept(cardId)}
+                  selected={keptOptionIndex === index}
+                  onClick={() => onPickKept(index)}
                 />
               </div>
             ))}
@@ -648,39 +648,29 @@ function BroadcasterModal({
                 <p className="text-xs font-bold uppercase tracking-[0.35em] text-[#f6ddd6]/60">Bottom Order</p>
                 <p className="mt-2 text-sm text-white/70">왼쪽에서 오른쪽 순서대로 먼저 내려갑니다.</p>
               </div>
-              <button
-                type="button"
-                disabled={loading || keptCardId === null}
-                onClick={onSubmit}
-                className="rounded-full bg-[#d95b5f] px-4 py-2 text-sm font-black text-white disabled:opacity-50"
-              >
-                선택 확정
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={loading || bottomOrder.length < 2}
+                  onClick={onSwapOrder}
+                  className="rounded-full border border-white/10 px-4 py-2 text-sm font-black text-white/80 disabled:opacity-30"
+                >
+                  순서 바꾸기
+                </button>
+                <button
+                  type="button"
+                  disabled={loading || keptCardId === null}
+                  onClick={onSubmit}
+                  className="rounded-full bg-[#d95b5f] px-4 py-2 text-sm font-black text-white disabled:opacity-50"
+                >
+                  선택 확정
+                </button>
+              </div>
             </div>
             <div className="mt-4 flex gap-4 overflow-x-auto pb-2">
               {bottomOrder.map((cardId, index) => (
-                <div key={`${cardId}-${index}`} className="shrink-0 rounded-[1.25rem] border border-white/10 bg-white/5 p-3">
-                  <div className="w-[118px]">
-                    <LoveLetterCardFace cardId={cardId} compact featured imageOnly />
-                  </div>
-                  <div className="mt-3 flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      disabled={index === 0}
-                      onClick={() => onMove(index, "left")}
-                      className="rounded-full border border-white/10 px-3 py-1 text-xs font-bold text-white/75 disabled:opacity-30"
-                    >
-                      ◀️
-                    </button>
-                    <button
-                      type="button"
-                      disabled={index === bottomOrder.length - 1}
-                      onClick={() => onMove(index, "right")}
-                      className="rounded-full border border-white/10 px-3 py-1 text-xs font-bold text-white/75 disabled:opacity-30"
-                    >
-                      ▶️
-                    </button>
-                  </div>
+                <div key={`${cardId}-${index}`} className="w-[132px] shrink-0">
+                  <LoveLetterCardFace cardId={cardId} compact featured imageOnly bare />
                 </div>
               ))}
             </div>
@@ -727,12 +717,59 @@ function getRoomIdFromRpcPayload(value: unknown): string | null {
   return null;
 }
 
-function swapArrayEntries<T>(items: T[], leftIndex: number, rightIndex: number): T[] {
-  const next = items.slice();
-  const temp = next[leftIndex];
-  next[leftIndex] = next[rightIndex];
-  next[rightIndex] = temp;
-  return next;
+function removeArrayEntryAtIndex<T>(items: T[], targetIndex: number): T[] {
+  return items.filter((_, index) => index !== targetIndex);
+}
+
+function haveSameLlCardMultiset(left: LlCardId[], right: LlCardId[]): boolean {
+  if (left.length !== right.length) return false;
+
+  const counts = new Map<LlCardId, number>();
+  for (const cardId of left) {
+    counts.set(cardId, (counts.get(cardId) ?? 0) + 1);
+  }
+  for (const cardId of right) {
+    const next = (counts.get(cardId) ?? 0) - 1;
+    if (next < 0) return false;
+    if (next === 0) {
+      counts.delete(cardId);
+    } else {
+      counts.set(cardId, next);
+    }
+  }
+
+  return counts.size === 0;
+}
+
+function getBroadcasterSelection(
+  options: LlCardId[],
+  keptOptionIndex: number | null,
+  bottomOrder: LlCardId[]
+): {
+  keptOptionIndex: number | null;
+  keptCardId: LlCardId | null;
+  bottomOrder: LlCardId[];
+} {
+  if (!options.length) {
+    return {
+      keptOptionIndex: null,
+      keptCardId: null,
+      bottomOrder: [],
+    };
+  }
+
+  const normalizedIndex = keptOptionIndex !== null && keptOptionIndex >= 0 && keptOptionIndex < options.length
+    ? keptOptionIndex
+    : 0;
+  const keptCardId = options[normalizedIndex] ?? null;
+  const defaultBottomOrder = removeArrayEntryAtIndex(options, normalizedIndex);
+  const normalizedBottomOrder = haveSameLlCardMultiset(bottomOrder, defaultBottomOrder) ? bottomOrder : defaultBottomOrder;
+
+  return {
+    keptOptionIndex: normalizedIndex,
+    keptCardId,
+    bottomOrder: normalizedBottomOrder,
+  };
 }
 
 function getRoleLabel(player: LlRoomPlayerRow, room: LlRoomRow | null): string {
@@ -757,12 +794,13 @@ function getCardSelectionGuide(
   if (card.id === 5) {
     return selectedTargetId ? "강제 버림 대상을 확정해 카드를 공개하세요." : "자신 포함 한 명을 선택하세요.";
   }
-  if (card.id === 6) return "공개 후 3장 중 1장을 고르는 전용 모달이 열립니다.";
+  if (card.id === 6) return "공개 후 3장 중 1장을 고릅니다.";
   if (card.id === 9) return "짝사랑은 공개되는 즉시 탈락합니다.";
   return "선택을 확정해 카드를 공개하세요.";
 }
 
-function getLoveLetterLobbyStateText(player: LlRoomPlayerRow): string {
+function getLoveLetterLobbyStateText(player: LlRoomPlayerRow, room: LlRoomRow | null): string {
+  if (room?.host_id === player.player_id) return "상태 대기";
   return player.ready ? "상태 준비 완료" : "상태 미준비";
 }
 
@@ -781,13 +819,13 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
   const [record, setRecord] = useState<PlayerRecord>(EMPTY_RECORD);
   const [roomCodeInput, setRoomCodeInput] = useState("");
   const [selectedPlayerLimit, setSelectedPlayerLimit] = useState<LlPlayerLimit | null>(null);
-  const [selectedCardId, setSelectedCardId] = useState<LlCardId | null>(null);
+  const [selectedHandIndex, setSelectedHandIndex] = useState<number | null>(null);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [selectedGuessId, setSelectedGuessId] = useState<LlCardId | null>(null);
-  const [broadcasterKeptCardId, setBroadcasterKeptCardId] = useState<LlCardId | null>(null);
+  const [broadcasterKeptOptionIndex, setBroadcasterKeptOptionIndex] = useState<number | null>(null);
   const [broadcasterBottomOrder, setBroadcasterBottomOrder] = useState<LlCardId[]>([]);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
-  const [privateResult, setPrivateResult] = useState<LlPrivateResult | null>(null);
+  const [privateResultQueue, setPrivateResultQueue] = useState<LlPrivateResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -799,6 +837,9 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
   const previousFinishedRef = useRef(false);
   const previousEliminatedRef = useRef(false);
   const heartbeatErrorShownRef = useRef(false);
+  const previousBroadcasterOptionsKeyRef = useRef<string | null>(null);
+  const lastHandledServerEventIdRef = useRef(0);
+  const serverEventsHydratedRef = useRef(false);
 
   useEffect(() => {
     roomRef.current = room;
@@ -828,6 +869,14 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     () => players.filter((player) => !player.left_at).sort((left, right) => left.seat_index - right.seat_index),
     [players]
   );
+  const privateResult = privateResultQueue[0] ?? null;
+  const enqueuePrivateResult = useCallback((result: LlPrivateResult | null) => {
+    if (!result || result.type === "broadcaster") return;
+    setPrivateResultQueue((current) => [...current, result]);
+  }, []);
+  const dismissPrivateResult = useCallback(() => {
+    setPrivateResultQueue((current) => current.slice(1));
+  }, []);
   const playerMap = useMemo(
     () => Object.fromEntries(activePlayers.map((player) => [player.player_id, player])),
     [activePlayers]
@@ -845,11 +894,12 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
   const isHost = Boolean(userId && room && room.host_id === userId);
   const myTurn = Boolean(userId && view && view.round_phase === "await_turn" && view.current_turn_player_id === userId);
   const myHand = view?.my_hand ?? [];
+  const selectedCardId = selectedHandIndex !== null ? myHand[selectedHandIndex] ?? null : null;
   const canSeeAllHands = Boolean(view?.reveal_all_hands || view?.spectator_mode);
   const tokenGoal = room?.target_token_count ?? getLoveLetterTokenGoal(room?.player_limit);
   const seatPlacements = useMemo(() => getLlSeatPlacements(activePlayers, userId), [activePlayers, userId]);
   const validTargetIds = useMemo(() => {
-    if (!selectedCardId) return [];
+    if (selectedCardId === null) return [];
     if (view?.pending_input.valid_target_ids.length) {
       return view.pending_input.valid_target_ids;
     }
@@ -881,6 +931,13 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     view.current_turn_player_id === userId &&
     view.pending_input.broadcaster_options.length > 0
   );
+  const broadcasterOptions = view?.pending_input.broadcaster_options ?? EMPTY_LL_CARD_IDS;
+  const broadcasterOptionsKey = broadcasterOptions.join(",");
+  const broadcasterSelection = useMemo(
+    () => getBroadcasterSelection(broadcasterOptions, broadcasterKeptOptionIndex, broadcasterBottomOrder),
+    [broadcasterBottomOrder, broadcasterKeptOptionIndex, broadcasterOptions]
+  );
+  const broadcasterKeptCardId = broadcasterSelection.keptCardId;
   const canAdvanceRound = Boolean(
     isHost &&
     room?.status === "playing" &&
@@ -889,34 +946,29 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     view.match_winner_ids.length === 0
   );
   const canResetToLobby = Boolean(isHost && roomFinished && !(room?.last_departed_nickname || view?.end_reason === "player_left"));
+  const readyRequiredPlayers = useMemo(
+    () => activePlayers.filter((player) => player.player_id !== room?.host_id),
+    [activePlayers, room?.host_id]
+  );
   const hostCanStart = Boolean(
     room?.status === "waiting" &&
     isHost &&
     activePlayers.length === room.player_limit &&
-    activePlayers.every((player) => player.ready)
+    readyRequiredPlayers.every((player) => player.ready)
   );
-  const centerNoteTitle = !view
-    ? ""
-    : view.round_phase === "round_reveal"
-      ? "라운드 결과 공개"
-      : view.round_phase === "await_next_round"
-        ? view.round_winner_ids.length > 1
-          ? "공동 라운드 승리"
-          : "라운드 결과 공개"
-        : view.round_phase === "match_finished"
-          ? "매치 결과 확정"
-          : view.round_phase === "await_broadcaster_resolution" && view.current_turn_player_id === userId
-            ? "방송부장 정리"
-            : view.current_turn_player_id
-              ? `${playerMap[view.current_turn_player_id]?.nickname_snapshot ?? "플레이어"} 차례`
-              : "진행 상황";
-  const hideCenterNoteDetail = Boolean(
-    view &&
-    (view.round_phase === "round_reveal" || view.round_phase === "await_next_round" || view.round_phase === "match_finished")
-  );
+  const latestServerEvent = view?.server_events[0] ?? null;
+  const centerNoteTag = latestServerEvent?.title ?? (view ? getLoveLetterPhaseLabel(view.round_phase) : "");
+  const centerNoteMessage = !view ? "" : latestServerEvent?.message ?? getLlTurnNotice(view, userId);
+  const centerNoteDetail = latestServerEvent?.detail ?? (!latestServerEvent ? view?.recent_private_message ?? null : null);
 
   useEffect(() => {
-    if (!selectedCardId) {
+    if (selectedHandIndex !== null && selectedHandIndex >= myHand.length) {
+      setSelectedHandIndex(null);
+    }
+  }, [myHand.length, selectedHandIndex]);
+
+  useEffect(() => {
+    if (selectedCardId === null) {
       setSelectedTargetId(null);
       setSelectedGuessId(null);
       return;
@@ -933,15 +985,20 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
   }, [selectedCardId, selectedTargetId, validTargetIds]);
 
   useEffect(() => {
-    if (!pendingBroadcaster || !view) {
-      setBroadcasterKeptCardId(null);
+    if (!pendingBroadcaster) {
+      previousBroadcasterOptionsKeyRef.current = null;
+      setBroadcasterKeptOptionIndex(null);
       setBroadcasterBottomOrder([]);
       return;
     }
-    const [first, ...rest] = view.pending_input.broadcaster_options;
-    setBroadcasterKeptCardId(first ?? null);
-    setBroadcasterBottomOrder(rest);
-  }, [pendingBroadcaster, view]);
+    if (previousBroadcasterOptionsKeyRef.current === broadcasterOptionsKey) {
+      return;
+    }
+    previousBroadcasterOptionsKeyRef.current = broadcasterOptionsKey;
+    setError("");
+    setBroadcasterKeptOptionIndex(0);
+    setBroadcasterBottomOrder(removeArrayEntryAtIndex(broadcasterOptions, 0));
+  }, [broadcasterOptions, broadcasterOptionsKey, pendingBroadcaster]);
 
   useEffect(() => {
     if (!userId || !view) return;
@@ -951,6 +1008,33 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     }
     previousEliminatedRef.current = currentlyEliminated;
   }, [eliminatedSet, userId, view]);
+
+  useEffect(() => {
+    if (!view) {
+      serverEventsHydratedRef.current = false;
+      lastHandledServerEventIdRef.current = 0;
+      return;
+    }
+    if (!serverEventsHydratedRef.current) {
+      lastHandledServerEventIdRef.current = view.server_events[0]?.id ?? 0;
+      serverEventsHydratedRef.current = true;
+      return;
+    }
+    if (!view.server_events.length) return;
+    const unseenEvents = view.server_events
+      .filter((event) => event.id > lastHandledServerEventIdRef.current)
+      .slice()
+      .sort((left, right) => left.id - right.id);
+    if (!unseenEvents.length) return;
+
+    lastHandledServerEventIdRef.current = unseenEvents[unseenEvents.length - 1].id;
+    const nextResults = unseenEvents
+      .map((event) => getLlPrivateResultFromServerEvent(event))
+      .filter((result): result is LlPrivateResult => Boolean(result && result.type !== "broadcaster"));
+    if (nextResults.length) {
+      setPrivateResultQueue((current) => [...current, ...nextResults]);
+    }
+  }, [view]);
 
   useEffect(() => {
     if (!roomFinished) {
@@ -970,13 +1054,15 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     setRoom(null);
     setPlayers([]);
     setView(null);
-    setSelectedCardId(null);
+    setSelectedHandIndex(null);
     setSelectedTargetId(null);
     setSelectedGuessId(null);
-    setBroadcasterKeptCardId(null);
+    setBroadcasterKeptOptionIndex(null);
     setBroadcasterBottomOrder([]);
-    setPrivateResult(null);
+    setPrivateResultQueue([]);
     setLeaveConfirmOpen(false);
+    lastHandledServerEventIdRef.current = 0;
+    serverEventsHydratedRef.current = false;
   }, []);
 
   const loadMyRecord = useCallback(async (currentUserId: string) => {
@@ -1056,8 +1142,8 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
 
   const syncAfterRpcMutation = useCallback(async (payload: unknown, fallbackRoomId?: string | null) => {
     const envelope = resolveLlRpcEnvelope(payload);
-    if (envelope.privateResult) {
-      setPrivateResult(envelope.privateResult);
+    if (envelope.privateResult && !(envelope.view?.server_events.length)) {
+      enqueuePrivateResult(envelope.privateResult);
     }
     if (envelope.view) {
       setView(envelope.view);
@@ -1070,7 +1156,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     if (roomId) {
       await syncRoomBundle(roomId, { silent: true });
     }
-  }, [syncRoomBundle]);
+  }, [enqueuePrivateResult, syncRoomBundle]);
 
   useEffect(() => {
     if (!supabase || authLoading || profileLoading || !userId || requiresNickname) return;
@@ -1230,7 +1316,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
   };
 
   const setPlayerReady = async (ready: boolean) => {
-    if (!supabase || !room) return;
+    if (!supabase || !room || isHost) return;
     setLoading(true);
     setError("");
 
@@ -1275,7 +1361,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
 
     setLoading(true);
     setError("");
-    setPrivateResult(null);
+    setPrivateResultQueue([]);
 
     const effectiveTargetPlayerId = needsTarget ? selectedTargetId : null;
     const effectiveGuessedCard = needsGuess ? selectedGuessId : null;
@@ -1293,7 +1379,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
       return;
     }
 
-    setSelectedCardId(null);
+    setSelectedHandIndex(null);
     setSelectedTargetId(null);
     setSelectedGuessId(null);
     await syncAfterRpcMutation(data, room.id);
@@ -1301,16 +1387,16 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
   };
 
   const resolveBroadcaster = async () => {
-    if (!supabase || !room || broadcasterKeptCardId === null) return;
+    if (!supabase || !room || broadcasterSelection.keptCardId === null) return;
 
     setLoading(true);
     setError("");
-    setPrivateResult(null);
+    setPrivateResultQueue([]);
 
     const { data, error: resolveError } = await supabase.rpc("ll_resolve_broadcaster", {
       p_room_id: room.id,
-      p_kept_card: broadcasterKeptCardId,
-      p_bottom_order: broadcasterBottomOrder,
+      p_kept_card: broadcasterSelection.keptCardId,
+      p_bottom_order: broadcasterSelection.bottomOrder,
     });
 
     if (resolveError) {
@@ -1320,6 +1406,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
     }
 
     await syncAfterRpcMutation(data, room.id);
+    setNotice("방송부장 정리를 완료했습니다.");
     setLoading(false);
   };
 
@@ -1593,7 +1680,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                       key={player.player_id}
                       title={getRoleLabel(player, room)}
                       name={player.nickname_snapshot}
-                      stateText={getLoveLetterLobbyStateText(player)}
+                      stateText={getLoveLetterLobbyStateText(player, room)}
                       tokenText={`비밀 폴라로이드 ${player.token_count} / ${tokenGoal}`}
                       emphasized={player.player_id === userId || room.status === "waiting"}
                     />
@@ -1612,7 +1699,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
 
               {room.status === "waiting" && (
                 <div className="mt-4 flex flex-wrap gap-2">
-                  {myPlayer && (
+                  {myPlayer && !isHost && (
                     <button
                       type="button"
                       onClick={() => void setPlayerReady(!myPlayer.ready)}
@@ -1710,13 +1797,16 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
 
                   <div className="space-y-4">
                     <div className="rounded-[1.75rem] border border-white/10 bg-black/25 p-5 text-center backdrop-blur-xl">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-[#f7d6d5]/60">Center Note</p>
-                      <h3 className="mt-3 text-2xl font-black text-white">{centerNoteTitle}</h3>
-                      {!hideCenterNoteDetail && (
-                        <p className="mt-3 text-sm leading-6 text-white/75">{getLlTurnNotice(view, userId)}</p>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.35em] text-[#f7d6d5]/60">Server Message</p>
+                      <h3 className="mt-3 text-2xl font-black text-white">서버 메세지</h3>
+                      {centerNoteTag && (
+                        <p className="mt-3 text-xs font-bold uppercase tracking-[0.28em] text-[#ffd9c8]/70">{centerNoteTag}</p>
                       )}
-                      {!hideCenterNoteDetail && view.recent_private_message && (
-                        <p className="mt-3 text-xs text-white/55">{view.recent_private_message}</p>
+                      {centerNoteMessage && (
+                        <p className="mt-3 text-sm leading-6 text-white/75">{centerNoteMessage}</p>
+                      )}
+                      {centerNoteDetail && (
+                        <p className="mt-3 text-xs text-white/55">{centerNoteDetail}</p>
                       )}
                     </div>
 
@@ -1813,10 +1903,10 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
                                 <LoveLetterCardFace
                                   cardId={cardId}
                                   imageOnly
-                                  selected={selectedCardId === cardId}
-                                  emphasis={myTurn && selectedCardId !== cardId}
+                                  selected={selectedHandIndex === index}
+                                  emphasis={myTurn && selectedHandIndex !== index}
                                   disabled={!myTurn || pendingBroadcaster || loading}
-                                  onClick={myTurn ? () => setSelectedCardId(cardId) : undefined}
+                                  onClick={myTurn ? () => setSelectedHandIndex(index) : undefined}
                                 />
                               </div>
                             ))
@@ -1949,7 +2039,7 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
 
       {showVerdict && roomFinished && <FinalVerdictOverlay text={verdictText} />}
 
-      {privateResult && <PrivateResultModal result={privateResult} onClose={() => setPrivateResult(null)} />}
+      {privateResult && <PrivateResultModal result={privateResult} onClose={dismissPrivateResult} />}
 
       {leaveConfirmOpen && (
         <LeaveConfirmModal
@@ -1961,23 +2051,17 @@ export function LoveLetterOnline({ entryHref = "/" }: { entryHref?: string }) {
 
       {pendingBroadcaster && view && (
         <BroadcasterModal
-          options={view.pending_input.broadcaster_options}
+          options={broadcasterOptions}
+          keptOptionIndex={broadcasterSelection.keptOptionIndex}
           keptCardId={broadcasterKeptCardId}
-          bottomOrder={broadcasterBottomOrder}
-          onPickKept={(cardId) => {
-            setBroadcasterKeptCardId(cardId);
-            setBroadcasterBottomOrder(view.pending_input.broadcaster_options.filter((candidate) => candidate !== cardId));
+          bottomOrder={broadcasterSelection.bottomOrder}
+          onPickKept={(index) => {
+            setBroadcasterKeptOptionIndex(index);
+            setBroadcasterBottomOrder(removeArrayEntryAtIndex(broadcasterOptions, index));
           }}
-          onMove={(index, direction) => {
-            if (direction === "left" && index > 0) {
-              setBroadcasterBottomOrder((current) => swapArrayEntries(current, index, index - 1));
-            }
-            if (direction === "right" && index < broadcasterBottomOrder.length - 1) {
-              setBroadcasterBottomOrder((current) => swapArrayEntries(current, index, index + 1));
-            }
-          }}
+          onSwapOrder={() => setBroadcasterBottomOrder((current) => current.slice().reverse())}
           onSubmit={() => void resolveBroadcaster()}
-          onClose={() => setPrivateResult(null)}
+          errorText={error}
           loading={loading}
         />
       )}
