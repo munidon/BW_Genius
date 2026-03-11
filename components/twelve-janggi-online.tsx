@@ -1517,7 +1517,7 @@ export function TwelveJanggiOnline({ entryHref = "/" }: { entryHref?: string }) 
                               disabled={!interactive}
                               whileHover={interactive ? { y: -2 } : undefined}
                               whileTap={interactive ? { scale: 0.98 } : undefined}
-                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-2.5 text-left transition sm:p-4 md:p-10 ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
+                              className={`relative aspect-square overflow-hidden rounded-[1.15rem] border p-1 text-left transition sm:p-1.5 md:p-2 ${cellTheme} ${interactive ? "cursor-pointer" : "cursor-default"
                                 } ${isSelectedCell
                                   ? "border-white/80 ring-2 ring-white shadow-[0_0_0_1px_rgba(255,255,255,0.4)]"
                                   : isMoveTarget || isDropTarget
@@ -1663,23 +1663,20 @@ function PieceToken({
 
   return (
     <div
-      className={`relative flex h-full w-full flex-col items-center justify-center rounded-[0.95rem] border px-2 py-2.5 shadow-lg sm:px-4 sm:py-5 ${mine
-        ? "border-lime-200/60 bg-gradient-to-br from-lime-100 to-emerald-100 text-[#163423]"
-        : "border-emerald-300/30 bg-gradient-to-br from-[#143228] to-[#091912] text-emerald-50"
-        } ${emphasized ? "scale-[1.02] shadow-[0_0_0_1px_rgba(255,255,255,0.55)_inset]" : ""}`}
+      className={`relative h-full w-full overflow-hidden ${emphasized ? "scale-[1.03]" : ""}`}
     >
-      <span className="absolute left-1.5 top-1.5 z-10 text-[9px] font-bold uppercase tracking-[0.18em] opacity-60 sm:left-2 sm:top-2 sm:text-[11px] sm:tracking-[0.28em]">
-        {piece.owner === "host" ? "H" : "G"}
-      </span>
       <TjPieceAsset
         candidates={getTjPieceImageCandidates(piece.kind)}
         alt={`${piece.owner === "host" ? "호스트" : "게스트"} ${pieceLabel}`}
         className="flex h-full w-full items-center justify-center"
-        sizes="(max-width: 768px) 96px, 160px"
-        imageClassName={`object-contain p-0 drop-shadow-[0_10px_18px_rgba(0,0,0,0.28)] ${mine ? "" : "rotate-180"}`}
+        sizes="(max-width: 640px) 28vw, (max-width: 1024px) 20vw, 180px"
+        imageClassName={`object-contain p-0 drop-shadow-[0_12px_22px_rgba(0,0,0,0.24)] transition-transform duration-200 ${mine ? "" : "rotate-180"}`}
         fallback={(
-          <div className="flex flex-col items-center justify-center">
-            <span className="text-xl font-black leading-none sm:text-3xl">{pieceLabel}</span>
+          <div className={`flex h-full w-full flex-col items-center justify-center rounded-[0.85rem] ${mine
+            ? "bg-gradient-to-br from-lime-100 to-emerald-100 text-[#163423]"
+            : "bg-gradient-to-br from-[#143228] to-[#091912] text-emerald-50"
+            }`}>
+            <span className="text-2xl font-black leading-none sm:text-4xl">{pieceLabel}</span>
             <span className="mt-1 text-[8px] font-bold uppercase tracking-[0.18em] opacity-60 sm:text-[10px] sm:tracking-[0.28em]">
               {piece.kind === "KING" ? "KING" : piece.kind === "JANG" ? "JANG" : piece.kind === "SANG" ? "SANG" : piece.kind}
             </span>
@@ -1733,7 +1730,7 @@ function HandRow({
             type="button"
             onClick={() => onSelect(handCode)}
             disabled={disabled}
-            className={`min-w-[5.5rem] rounded-[1rem] border px-3 py-3 text-center transition ${selected === handCode
+            className={`min-w-[4.75rem] rounded-[1rem] border px-2.5 py-2.5 text-center transition sm:min-w-[5.5rem] ${selected === handCode
               ? "border-white bg-lime-100 text-[#163423] ring-2 ring-white/85"
               : "border-emerald-100/10 bg-[#10251d] text-emerald-50"
               } ${disabled ? "cursor-default opacity-75" : "hover:-translate-y-0.5"}`}
@@ -1741,9 +1738,9 @@ function HandRow({
             <TjPieceAsset
               candidates={getTjPieceImageCandidates(handCodeToTjPieceKind(handCode))}
               alt={`${owner === "host" ? "호스트" : owner === "guest" ? "게스트" : "포로"} ${formatTjHandCode(handCode)}`}
-              className="mx-auto flex h-12 w-12 items-center justify-center"
-              sizes="48px"
-              imageClassName={`object-contain p-0.5 ${viewerOwner && owner && viewerOwner !== owner ? "rotate-180" : ""}`}
+              className="mx-auto flex h-14 w-14 items-center justify-center sm:h-16 sm:w-16"
+              sizes="(max-width: 640px) 56px, 64px"
+              imageClassName={`object-contain p-0 drop-shadow-[0_8px_16px_rgba(0,0,0,0.18)] ${viewerOwner && owner && viewerOwner !== owner ? "rotate-180" : ""}`}
               fallback={<p className="text-lg font-black">{formatTjHandCode(handCode)}</p>}
             />
             <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.25em] opacity-60">{handCode}</p>
