@@ -408,7 +408,19 @@ export function formatLoveLetterError(raw: string, code?: string): string {
   }
   if ((code === "PGRST202" || lower.includes("does not exist")) && raw.includes("ll_append_action_log")) {
     return withLoveLetterRawServerError(
-      "러브레터 액션 로그 함수 시그니처가 오래된 상태입니다. 최신 ll-schema.sql 또는 ll-broadcaster-rpc-hotfix.sql을 다시 적용해 주세요.",
+      "러브레터 액션 로그 함수 시그니처가 오래된 상태입니다. 최신 ll-schema.sql 또는 ll-smallint-overload-hotfix.sql을 다시 적용해 주세요.",
+      raw
+    );
+  }
+  if ((code === "PGRST202" || lower.includes("does not exist")) && raw.includes("ll_remove_first_card")) {
+    return withLoveLetterRawServerError(
+      "러브레터 카드 제거 helper 시그니처가 오래된 상태입니다. 최신 ll-schema.sql 또는 ll-smallint-overload-hotfix.sql을 다시 적용해 주세요.",
+      raw
+    );
+  }
+  if ((code === "PGRST202" || lower.includes("does not exist")) && raw.includes("ll_card_name")) {
+    return withLoveLetterRawServerError(
+      "러브레터 카드 이름 helper 시그니처가 오래된 상태입니다. 최신 ll-schema.sql 또는 ll-smallint-overload-hotfix.sql을 다시 적용해 주세요.",
       raw
     );
   }

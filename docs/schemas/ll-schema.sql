@@ -298,6 +298,17 @@ begin
 end;
 $$;
 
+create or replace function public.ll_remove_first_card(p_cards smallint[], p_card integer)
+returns smallint[]
+language sql
+immutable
+as $$
+  select public.ll_remove_first_card(
+    p_cards,
+    case when p_card is null then null else p_card::smallint end
+  );
+$$;
+
 create or replace function public.ll_array_contains_same_cards(p_left smallint[], p_right smallint[])
 returns boolean
 language sql
@@ -379,6 +390,39 @@ as $$
     p_target_nickname,
     p_card_id,
     p_guessed_card,
+    p_public_message,
+    coalesce(p_payload, '{}'::jsonb)
+  );
+$$;
+
+create or replace function public.ll_append_action_log(
+  p_room_id uuid,
+  p_round_number int,
+  p_action_type text,
+  p_actor_id uuid,
+  p_actor_nickname text,
+  p_target_player_id uuid,
+  p_target_nickname text,
+  p_card_id integer,
+  p_guessed_card integer,
+  p_public_message text,
+  p_payload jsonb default '{}'::jsonb
+)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  select public.ll_append_action_log(
+    p_room_id,
+    p_round_number,
+    p_action_type,
+    p_actor_id,
+    p_actor_nickname,
+    p_target_player_id,
+    p_target_nickname,
+    case when p_card_id is null then null else p_card_id::smallint end,
+    case when p_guessed_card is null then null else p_guessed_card::smallint end,
     p_public_message,
     coalesce(p_payload, '{}'::jsonb)
   );
@@ -480,6 +524,16 @@ as $$
   end;
 $$;
 
+create or replace function public.ll_card_name(p_card_id integer)
+returns text
+language sql
+immutable
+as $$
+  select public.ll_card_name(
+    case when p_card_id is null then null else p_card_id::smallint end
+  );
+$$;
+
 create or replace function public.ll_apply_scholar_constraint(
   p_hands jsonb,
   p_discard_piles jsonb,
@@ -499,7 +553,7 @@ begin
   current_hand := public.ll_card_map_get(next_hands, p_player_id);
   if 8 = any(current_hand) and (5 = any(current_hand) or 7 = any(current_hand)) then
     scholar_forced := true;
-    current_hand := public.ll_remove_first_card(current_hand, 8);
+    current_hand := public.ll_remove_first_card(current_hand, 8::smallint);
     current_discard := public.ll_card_map_get(next_discards, p_player_id) || 8::smallint;
     next_hands := public.ll_card_map_put(next_hands, p_player_id, current_hand);
     next_discards := public.ll_card_map_put(next_discards, p_player_id, current_discard);
@@ -1922,6 +1976,11 @@ begin
     end if;
 
     if p_target_player_id is not null then
+      select nickname_snapshot into target_nickname
+      from public.ll_room_players
+      where room_id = p_room_id
+        and player_id = p_target_player_id;
+
       target_hand := public.ll_card_map_get(round_row.hands, p_target_player_id);
       private_result := jsonb_build_object(
         'type', 'counselor',
@@ -1952,6 +2011,11 @@ begin
     end if;
 
     if p_target_player_id is not null then
+      select nickname_snapshot into target_nickname
+      from public.ll_room_players
+      where room_id = p_room_id
+        and player_id = p_target_player_id;
+
       target_hand := public.ll_card_map_get(round_row.hands, p_target_player_id);
       actor_card := coalesce(actor_remaining_hand[1], -1);
       target_card := coalesce(target_hand[1], -1);
@@ -2125,6 +2189,11 @@ begin
     end if;
 
     if p_target_player_id is not null then
+      select nickname_snapshot into target_nickname
+      from public.ll_room_players
+      where room_id = p_room_id
+        and player_id = p_target_player_id;
+
       target_hand := public.ll_card_map_get(round_row.hands, p_target_player_id);
       round_row.hands := public.ll_card_map_put(round_row.hands, actor_id, target_hand);
       round_row.hands := public.ll_card_map_put(round_row.hands, p_target_player_id, actor_remaining_hand);
